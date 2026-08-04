@@ -1,0 +1,36 @@
+---
+# Entfernt nach der Installation/dem Build nicht mehr benötigte Docker-
+# Images, um Speicherplatz freizugeben. Nur ansible.builtin.command gegen
+# die docker-CLI - keine community.docker Collection.
+#
+# WICHTIG: Es wird bewusst NIE "docker volume prune" o. Ä. ausgeführt -
+# das würde die benannten Volumes mssql-log/mssql-secrets gefährden
+# (Verschlüsselungs-/Zertifikatsmaterial von SQL Server liegt dort). Diese
+# Rolle fasst ausschließlich Images (und optional den Build-Cache) an.
+
+- name: Aufräumen überspringen (docker_cleanup_manage=false)
+  ansible.builtin.debug:
+    msg: "Docker-Image-Cleanup wird übersprungen (docker_cleanup_manage=false)."
+  when: not (docker_cleanup_manage | bool)
+
+- name: Nicht mehr benötigte Docker-Images entfernen
+  ansible.builtin.command: >-
+    docker image prune {{ '-a' if docker_cleanup_prune_all | bool else '' }} -f
+  register: docker_image_prune
+  changed_when: "'Total reclaimed space: 0B' not in docker_image_prune.stdout"
+  when: docker_cleanup_manage | bool
+
+- name: Docker-Build-Cache aufräumen
+  ansible.builtin.command: docker builder prune -f
+  register: docker_builder_prune
+  changed_when: "'Total reclaimed space: 0B' not in docker_builder_prune.stdout"
+  when:
+    - docker_cleanup_manage | bool
+    - docker_cleanup_builder_cache | bool
+
+- name: Freigegebenen Speicherplatz melden
+  ansible.builtin.debug:
+    msg: >-
+      Images: {{ docker_image_prune.stdout_lines[-1] | default('n/a') }} |
+      Build-Cache: {{ docker_builder_prune.stdout_lines[-1] | default('übersprungen') }}
+  when: docker_cleanup_manage | bool

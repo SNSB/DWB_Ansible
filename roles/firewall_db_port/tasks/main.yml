@@ -1,0 +1,96 @@
+---
+# Gibt den Datenbank-Port (mssql_db_port) in der Host-Firewall der VM frei.
+# Bewusst nur ansible.builtin.command gegen die firewall-cmd/ufw-CLIs, statt
+# z. B. ansible.posix.firewalld - das ist eine separate Collection und damit
+# laut Vorgabe ("nur Standard-Ansible-Tools") nicht erlaubt.
+#
+# Primäres Ziel: Rocky/RHEL mit firewalld (Standard). Debian/ufw ist als
+# Bonus enthalten, aber weniger intensiv getestet, da die Ziel-VM Rocky ist.
+
+- name: Freigabe überspringen (firewall_manage=false)
+  ansible.builtin.debug:
+    msg: "Firewall-Freigabe wird übersprungen (firewall_manage=false)."
+  when: not (firewall_manage | bool)
+
+# ---------------------------------------------------------------------------
+# RHEL / Rocky / AlmaLinux - firewalld
+# ---------------------------------------------------------------------------
+- name: firewalld - Status ermitteln
+  ansible.builtin.command: firewall-cmd --state
+  register: firewalld_state
+  changed_when: false
+  failed_when: false
+  when:
+    - firewall_manage | bool
+    - ansible_os_family == "RedHat"
+
+- name: firewalld - Port freigeben
+  when:
+    - firewall_manage | bool
+    - ansible_os_family == "RedHat"
+    - firewalld_state is defined
+    - firewalld_state.rc == 0
+  block:
+    - name: Prüfen, ob der Port bereits dauerhaft freigegeben ist
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --query-port={{ mssql_db_port }}/tcp
+      register: firewalld_port_check
+      changed_when: false
+      failed_when: false
+
+    - name: Port {{ mssql_db_port }}/tcp dauerhaft freigeben
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --add-port={{ mssql_db_port }}/tcp
+      when: firewalld_port_check.rc != 0
+      register: firewalld_port_add
+
+    - name: firewalld neu laden (nur bei Änderung)
+      ansible.builtin.command: firewall-cmd --reload
+      when: firewalld_port_add is changed
+
+- name: firewalld nicht aktiv - Hinweis ausgeben
+  ansible.builtin.debug:
+    msg: >-
+      firewalld ist auf diesem Host nicht aktiv (firewall-cmd --state
+      lieferte keinen Erfolg). Port {{ mssql_db_port }}/tcp wurde NICHT
+      automatisch freigegeben - falls eine andere Firewall-Lösung im Einsatz
+      ist, dort manuell prüfen.
+  when:
+    - firewall_manage | bool
+    - ansible_os_family == "RedHat"
+    - firewalld_state is defined
+    - firewalld_state.rc != 0
+
+# ---------------------------------------------------------------------------
+# Debian / Ubuntu - ufw (Bonus, best effort)
+# ---------------------------------------------------------------------------
+- name: ufw - Status ermitteln
+  ansible.builtin.command: ufw status
+  register: ufw_status
+  changed_when: false
+  failed_when: false
+  when:
+    - firewall_manage | bool
+    - ansible_os_family == "Debian"
+
+- name: "ufw - Port {{ mssql_db_port }}/tcp freigeben"
+  ansible.builtin.command: "ufw allow {{ mssql_db_port }}/tcp"
+  when:
+    - firewall_manage | bool
+    - ansible_os_family == "Debian"
+    - ufw_status is defined
+    - ufw_status.rc == 0
+    - "'Status: active' in ufw_status.stdout"
+    - (mssql_db_port | string) + '/tcp' not in ufw_status.stdout
+
+- name: ufw nicht aktiv - Hinweis ausgeben
+  ansible.builtin.debug:
+    msg: >-
+      ufw ist auf diesem Host nicht installiert/aktiv. Port
+      {{ mssql_db_port }}/tcp wurde NICHT automatisch freigegeben - falls
+      eine andere Firewall-Lösung im Einsatz ist, dort manuell prüfen.
+  when:
+    - firewall_manage | bool
+    - ansible_os_family == "Debian"
+    - ufw_status is defined
+    - (ufw_status.rc != 0 or 'Status: active' not in ufw_status.stdout)

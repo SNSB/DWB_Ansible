@@ -1,0 +1,11 @@
+---
+- name: MSSQL-Server-Container mit Agent-Backup-Job deployen
+  hosts: mssql_servers
+  become: true
+
+  roles:
+    - role: docker_engine
+    - role: mssql_docker
+    - role: docker_cleanup
+    - role: firewall_db_port
+    - role: sftp_backup

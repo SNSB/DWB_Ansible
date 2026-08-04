@@ -1,0 +1,161 @@
+---
+# Installiert Docker Engine + Compose-Plugin. Unterstützt:
+#   - Debian/Ubuntu (apt, offizielles Docker-Repo)
+#   - RHEL/Rocky/AlmaLinux (dnf, offizielles Docker-Repo)
+# Nur ansible.builtin-Module, keine community.* Collections.
+
+- name: Docker-Installation überspringen (docker_engine_manage=false)
+  ansible.builtin.debug:
+    msg: "Docker-Installation wird übersprungen (docker_engine_manage=false)."
+  when: not (docker_engine_manage | bool)
+
+- name: Unbekannte OS-Familie melden
+  ansible.builtin.debug:
+    msg: >-
+      ansible_os_family={{ ansible_os_family }} wird von dieser Rolle nicht
+      unterstützt (nur Debian und RedHat). Docker muss manuell vorhanden sein.
+  when:
+    - docker_engine_manage | bool
+    - ansible_os_family not in ["Debian", "RedHat"]
+
+# ---------------------------------------------------------------------------
+# Debian / Ubuntu
+# ---------------------------------------------------------------------------
+- name: Debian/Ubuntu - Docker installieren
+  when:
+    - docker_engine_manage | bool
+    - ansible_os_family == "Debian"
+  block:
+    - name: Benötigte Pakete installieren
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Verzeichnis für APT-Keyrings anlegen
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Offiziellen Docker-GPG-Key herunterladen
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Docker-APT-Repository hinzufügen (deb822-Format)
+      ansible.builtin.deb822_repository:
+        name: docker
+        types: [deb]
+        uris: "https://download.docker.com/linux/ubuntu"
+        suites: "{{ ansible_distribution_release }}"
+        components: [stable]
+        architectures: "{{ 'amd64' if ansible_architecture == 'x86_64' else ansible_architecture }}"
+        signed_by: /etc/apt/keyrings/docker.asc
+        state: present
+
+    - name: Docker Engine + Compose-Plugin installieren
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Docker-Dienst aktivieren und starten
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+# ---------------------------------------------------------------------------
+# RHEL / Rocky / AlmaLinux
+#
+# Rocky/RHEL bringen standardmäßig Podman mit, nicht Docker - diese Rolle
+# installiert Docker CE explizit daneben (bzw. anstelle des docker-CLI-Shims
+# von Podman), BEVOR die mssql_docker-Rolle läuft.
+#
+# Rocky 10 hat noch keinen eigenen Docker-Repo-Pfad: https://download.docker.
+# com/linux/rhel/10/... liefert 404 (Stand 2026). Der centos-Pfad
+# funktioniert nachweislich auch für Rocky/RHEL 10 (RPMs sind
+# distributionsunabhängig kompatibel), siehe docker_ce_repo_url in
+# defaults/main.yml und https://github.com/rocky-linux/documentation/issues/2854
+# ---------------------------------------------------------------------------
+- name: RHEL/Rocky/AlmaLinux - Docker installieren
+  when:
+    - docker_engine_manage | bool
+    - ansible_os_family == "RedHat"
+  block:
+    - name: Alte/inkompatible Docker-Pakete entfernen (No-Op, falls nicht vorhanden)
+      ansible.builtin.dnf:
+        name:
+          - docker
+          - docker-client
+          - docker-client-latest
+          - docker-common
+          - docker-latest
+          - docker-latest-logrotate
+          - docker-logrotate
+          - docker-engine
+          - runc
+        state: absent
+
+    - name: podman-docker entfernen (Shim kollidiert mit /usr/bin/docker aus docker-ce)
+      ansible.builtin.dnf:
+        name: podman-docker
+        state: absent
+      when: docker_remove_podman_docker | bool
+      # Hinweis: "podman" selbst bleibt installiert und unangetastet - nur der
+      # docker-CLI-Kompatibilitäts-Shim (podman-docker) wird entfernt, da er
+      # sonst denselben Pfad (/usr/bin/docker) beansprucht wie docker-ce.
+
+    - name: kernel-modules-extra installieren (verhindert xt_addrtype-Fehler bei Minimal-/Cloud-Images)
+      ansible.builtin.dnf:
+        name: kernel-modules-extra
+        state: present
+
+    - name: xt_addrtype dauerhaft beim Boot laden
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/xt_addrtype.conf
+        content: |
+          xt_addrtype
+        mode: "0644"
+
+    - name: xt_addrtype sofort laden (kein Reboot nötig)
+      ansible.builtin.command: modprobe xt_addrtype
+      changed_when: false
+
+    - name: Docker-CE-Repo-Datei ablegen
+      ansible.builtin.get_url:
+        url: "{{ docker_ce_repo_url }}"
+        dest: /etc/yum.repos.d/docker-ce.repo
+        mode: "0644"
+
+    - name: Docker Engine + Compose-Plugin installieren
+      ansible.builtin.dnf:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Docker-Dienst aktivieren und starten
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+# ---------------------------------------------------------------------------
+- name: Prüfen, dass docker compose verfügbar ist
+  ansible.builtin.command: docker compose version
+  register: docker_compose_check
+  changed_when: false
+  when: docker_engine_manage | bool

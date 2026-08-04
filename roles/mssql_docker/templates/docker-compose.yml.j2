@@ -1,0 +1,35 @@
+services:
+  mssql:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: my-mssql-with-agent:2022
+    container_name: mssql-server
+    hostname: mssql-server
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${SA_PASSWORD}"
+      MSSQL_PID: "Developer"
+      MSSQL_AGENT_ENABLED: "True"
+      ADMIN_LOGIN: "${ADMIN_LOGIN}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
+      DISABLE_SA: "${DISABLE_SA:-true}"
+    ports:
+      - "{{ mssql_db_port }}:1433"
+    volumes:
+      - ./data:/var/opt/mssql/data
+      - ./backup:/var/opt/mssql/backup
+      - mssql-log:/var/opt/mssql/log
+      - mssql-secrets:/var/opt/mssql/secrets
+    restart: unless-stopped
+    healthcheck:
+      # Uses the management login, since sa is disabled after first boot.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U \"$$ADMIN_LOGIN\" -P \"$$ADMIN_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null || /opt/mssql-tools/bin/sqlcmd -S localhost -U \"$$ADMIN_LOGIN\" -P \"$$ADMIN_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  mssql-log:
+  mssql-secrets:

@@ -1,0 +1,13 @@
+---
+docker_cleanup_manage: true
+
+# true = "docker image prune -a -f" (entfernt ALLE Images ohne laufenden
+#        oder gestoppten Container, nicht nur ungetaggte/dangling).
+# false = "docker image prune -f" (nur dangling Images).
+# "-a" ist sicher im Sinne von: es entfernt nie ein Image, das von einem
+# Container (egal ob running oder gestoppt) referenziert wird - es räumt
+# aber gründlicher auf, was hier ausdrücklich gewünscht ist.
+docker_cleanup_prune_all: true
+
+# Zusätzlich den Docker-Build-Cache aufräumen (aus "docker compose build").
+docker_cleanup_builder_cache: true

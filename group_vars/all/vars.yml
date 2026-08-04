@@ -1,0 +1,23 @@
+---
+# Nicht-geheime Konfiguration. Alle Zugangsdaten liegen in der verschlüsselten
+# group_vars/all/vault.yml (siehe vault.example.yml als Vorlage) und werden
+# hier nur unter "normalen" Variablennamen durchgereicht, damit Tasks und
+# Templates nicht wissen müssen, dass sie aus dem Vault stammen.
+
+mssql_remote_dir: /opt/mssql-docker
+mssql_disable_sa: true
+
+# Host-Port, unter dem der SQL Server erreichbar ist (Docker-Portmapping UND
+# die von der firewall_db_port-Rolle freigegebene Firewall-Portnummer).
+mssql_db_port: 1433
+
+# Docker-Engine-Installation optional abschaltbar, falls auf der VM bereits
+# Docker + Compose-Plugin vorhanden sind.
+docker_engine_manage: true
+
+# --- aus dem Vault ---
+sa_password: "{{ vault_sa_password }}"
+admin_login: "{{ vault_admin_login }}"
+admin_password: "{{ vault_admin_password }}"
+sftp_backup_login: "{{ vault_sftp_backup_login }}"
+sftp_backup_password: "{{ vault_sftp_backup_password }}"

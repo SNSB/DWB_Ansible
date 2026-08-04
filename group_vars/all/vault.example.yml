@@ -1,0 +1,20 @@
+---
+# Vorlage für die verschlüsselte Vault-Datei.
+#
+#   cp group_vars/all/vault.example.yml group_vars/all/vault.yml
+#   # Passwörter unten anpassen, dann:
+#   ansible-vault encrypt group_vars/all/vault.yml
+#
+# vault.yml selbst NICHT ins Git-Repo committen (unverschlüsselt) bzw. nur
+# verschlüsselt committen. Muss SQL Servers Passwort-Policy erfüllen:
+# mind. 8 Zeichen, Groß-/Kleinbuchstaben, Ziffer, Sonderzeichen.
+# Darf kein einfaches Anführungszeichen (') enthalten (siehe
+# setup-admin-login.sql – sqlcmd ersetzt Variablen als reinen Text).
+
+vault_sa_password: "Ch4ng3-Th1s-SA-P@ssw0rd!"
+vault_admin_login: "dbadmin"
+vault_admin_password: "Ch4ng3-Th1s-Admin-P@ssw0rd!"
+
+# SFTP-only-Nutzer mit Lesezugriff auf das Backup-Verzeichnis.
+vault_sftp_backup_login: "backup-reader"
+vault_sftp_backup_password: "Ch4ng3-Th1s-SFTP-P@ssw0rd!"

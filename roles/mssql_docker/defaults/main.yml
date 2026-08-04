@@ -1,0 +1,4 @@
+---
+mssql_remote_dir: /opt/mssql-docker
+mssql_disable_sa: true
+mssql_db_port: 1433

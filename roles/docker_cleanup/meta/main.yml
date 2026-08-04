@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  description: Entfernt nicht mehr benötigte Docker-Images nach der Installation, nur ansible.builtin
+  min_ansible_version: "2.14"
+
+dependencies: []

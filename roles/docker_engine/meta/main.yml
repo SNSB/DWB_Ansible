@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  description: Installiert Docker Engine + Compose-Plugin (Debian/Ubuntu + RHEL/Rocky/AlmaLinux), nur ansible.builtin
+  min_ansible_version: "2.14"
+
+dependencies: []

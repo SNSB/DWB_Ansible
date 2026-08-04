@@ -1,0 +1,5 @@
+---
+- name: sshd neu laden
+  ansible.builtin.service:
+    name: "{{ sftp_backup_ssh_service | default('sshd') }}"
+    state: reloaded

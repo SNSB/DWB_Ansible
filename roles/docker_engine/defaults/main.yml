@@ -1,0 +1,17 @@
+---
+# Auf false setzen, wenn Docker + Compose-Plugin auf der VM bereits
+# vorhanden sind und diese Rolle nichts installieren soll.
+docker_engine_manage: true
+
+# --- nur relevant für ansible_os_family == "RedHat" (Rocky/RHEL/Alma) ---
+
+# Rocky/RHEL 10 haben (Stand 2026) noch keinen eigenen Docker-Repo-Pfad;
+# der centos-Pfad ist der von der Community verifizierte Workaround.
+# Überschreiben, sobald Docker einen eigenen rhel/10-Pfad veröffentlicht.
+docker_ce_repo_url: "https://download.docker.com/linux/centos/docker-ce.repo"
+
+# Entfernt das Paket "podman-docker" (Shim, der /usr/bin/docker auf podman
+# umleitet), da es sonst mit dem echten docker-ce-Paket kollidiert.
+# "podman" selbst bleibt davon unberührt. Auf false setzen, um den Shim
+# zu behalten (nicht empfohlen, wenn docker-ce parallel installiert wird).
+docker_remove_podman_docker: true

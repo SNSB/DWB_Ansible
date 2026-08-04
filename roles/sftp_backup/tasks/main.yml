@@ -1,0 +1,193 @@
+---
+# Installiert/startet den SSH-Dienst (liefert auch SFTP), legt einen
+# SFTP-only-Nutzer mit Chroot auf das Backup-Verzeichnis an und stellt per
+# ACL sicher, dass er es lesen kann - unabhängig vom regelmäßigen
+# "chown mssql:mssql" des Containers auf denselben Ordner. Nur
+# ansible.builtin-Module bzw. Standard-CLI-Tools (setfacl, semanage,
+# restorecon) über ansible.builtin.command.
+
+- name: Überspringen (sftp_backup_manage=false)
+  ansible.builtin.debug:
+    msg: "SFTP-Backup-Zugang wird übersprungen (sftp_backup_manage=false)."
+  when: not (sftp_backup_manage | bool)
+
+- name: OpenSSH-Server und acl-Paket installieren
+  ansible.builtin.package:
+    name:
+      - openssh-server
+      - acl
+    state: present
+  when: sftp_backup_manage | bool
+
+- name: SSH-Dienstnamen ermitteln (sshd auf RedHat, ssh auf Debian)
+  ansible.builtin.set_fact:
+    sftp_backup_ssh_service: "{{ 'sshd' if ansible_os_family == 'RedHat' else 'ssh' }}"
+  when: sftp_backup_manage | bool
+
+- name: SSH-Dienst aktivieren und starten
+  ansible.builtin.service:
+    name: "{{ sftp_backup_ssh_service }}"
+    state: started
+    enabled: true
+  when: sftp_backup_manage | bool
+
+- name: Login-Shell für den SFTP-Nutzer ermitteln
+  ansible.builtin.set_fact:
+    sftp_backup_shell: "{{ sftp_backup_shell_redhat if ansible_os_family == 'RedHat' else sftp_backup_shell_debian }}"
+  when: sftp_backup_manage | bool
+
+- name: SFTP-Nutzer anlegen (nologin-Shell, kein eigenes Home wird erstellt)
+  ansible.builtin.user:
+    name: "{{ sftp_backup_login }}"
+    password: "{{ sftp_backup_password | password_hash('sha512') }}"
+    shell: "{{ sftp_backup_shell }}"
+    home: "{{ sftp_backup_home }}"
+    create_home: false
+    system: true
+    state: present
+  when: sftp_backup_manage | bool
+  no_log: true # verhindert, dass der Passwort-Hash im Output landet
+
+- name: Leserechte per ACL auf bestehende Backup-Dateien gewähren
+  ansible.builtin.command: >-
+    setfacl -R -m u:{{ sftp_backup_login }}:rX {{ mssql_remote_dir }}/backup
+  changed_when: false
+  when: sftp_backup_manage | bool
+
+- name: Default-ACL setzen, damit künftige Backups automatisch lesbar sind
+  ansible.builtin.command: >-
+    setfacl -R -d -m u:{{ sftp_backup_login }}:rX {{ mssql_remote_dir }}/backup
+  changed_when: false
+  when: sftp_backup_manage | bool
+  # "rX" statt "rw": Lesen ja, Ausführen nur für Verzeichnisse (kein
+  # Schreiben/Löschen möglich). "-d" = Default-ACL, wird von neu erstellten
+  # Dateien/Unterordnern automatisch geerbt - übersteht damit auch den
+  # "chown -R mssql:mssql backup" bei jedem Container-Neustart, da chown
+  # (im Gegensatz zu chmod) bestehende ACL-Einträge nicht anfasst.
+
+- name: Verzeichnis für sshd-Drop-in-Konfigurationen sicherstellen
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    mode: "0755"
+  when: sftp_backup_manage | bool
+
+- name: Sicherstellen, dass sshd_config die Drop-ins einbindet
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^Include\s+/etc/ssh/sshd_config\.d/\*\.conf'
+    line: "Include /etc/ssh/sshd_config.d/*.conf"
+    insertbefore: BOF
+    validate: /usr/sbin/sshd -t -f %s
+  notify: sshd neu laden
+  when: sftp_backup_manage | bool
+
+- name: sshd-Drop-in für den SFTP-Chroot rendern
+  ansible.builtin.template:
+    src: sftp-backup.conf.j2
+    dest: /etc/ssh/sshd_config.d/99-sftp-backup.conf
+    mode: "0600"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: sshd neu laden
+  when: sftp_backup_manage | bool
+
+# ---------------------------------------------------------------------------
+# Firewall - SFTP läuft über den normalen SSH-Port, kein eigenes Protokoll.
+# Gleiches Muster wie roles/firewall_db_port, aber eigenständig über
+# sftp_backup_firewall_manage/sftp_backup_port steuerbar. Rein CLI-basiert
+# (firewall-cmd/ufw über ansible.builtin.command) - kein ansible.posix.
+# ---------------------------------------------------------------------------
+- name: firewalld - Status ermitteln (SFTP-Port)
+  ansible.builtin.command: firewall-cmd --state
+  register: sftp_backup_firewalld_state
+  changed_when: false
+  failed_when: false
+  when:
+    - sftp_backup_manage | bool
+    - sftp_backup_firewall_manage | bool
+    - ansible_os_family == "RedHat"
+
+- name: firewalld - SFTP/SSH-Port freigeben
+  when:
+    - sftp_backup_manage | bool
+    - sftp_backup_firewall_manage | bool
+    - ansible_os_family == "RedHat"
+    - sftp_backup_firewalld_state is defined
+    - sftp_backup_firewalld_state.rc == 0
+  block:
+    - name: Prüfen, ob der Port bereits dauerhaft freigegeben ist
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --query-port={{ sftp_backup_port }}/tcp
+      register: sftp_backup_firewalld_port_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Port {{ sftp_backup_port }}/tcp dauerhaft freigeben"
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --add-port={{ sftp_backup_port }}/tcp
+      when: sftp_backup_firewalld_port_check.rc != 0
+      register: sftp_backup_firewalld_port_add
+
+    - name: firewalld neu laden (nur bei Änderung)
+      ansible.builtin.command: firewall-cmd --reload
+      when: sftp_backup_firewalld_port_add is changed
+
+- name: ufw - Status ermitteln (SFTP-Port)
+  ansible.builtin.command: ufw status
+  register: sftp_backup_ufw_status
+  changed_when: false
+  failed_when: false
+  when:
+    - sftp_backup_manage | bool
+    - sftp_backup_firewall_manage | bool
+    - ansible_os_family == "Debian"
+
+- name: "ufw - Port {{ sftp_backup_port }}/tcp freigeben"
+  ansible.builtin.command: "ufw allow {{ sftp_backup_port }}/tcp"
+  when:
+    - sftp_backup_manage | bool
+    - sftp_backup_firewall_manage | bool
+    - ansible_os_family == "Debian"
+    - sftp_backup_ufw_status is defined
+    - sftp_backup_ufw_status.rc == 0
+    - "'Status: active' in sftp_backup_ufw_status.stdout"
+    - (sftp_backup_port | string) + '/tcp' not in sftp_backup_ufw_status.stdout
+
+# ---------------------------------------------------------------------------
+# SELinux (nur RedHat-Familie, best effort) - Rocky 10 läuft standardmäßig
+# mit enforcing SELinux; ohne passenden Kontext auf dem Chroot-Verzeichnis
+# bricht sshd die Verbindung sonst kommentarlos ab.
+# ---------------------------------------------------------------------------
+- name: SELinux-Status ermitteln
+  ansible.builtin.command: getenforce
+  register: sftp_backup_selinux_status
+  changed_when: false
+  failed_when: false
+  when:
+    - sftp_backup_manage | bool
+    - ansible_os_family == "RedHat"
+
+- name: SELinux-Kontext für den Chroot setzen
+  when:
+    - sftp_backup_manage | bool
+    - ansible_os_family == "RedHat"
+    - sftp_backup_selinux_status is defined
+    - sftp_backup_selinux_status.stdout | default('') == "Enforcing"
+  block:
+    - name: policycoreutils-python-utils installieren (stellt semanage bereit)
+      ansible.builtin.package:
+        name: policycoreutils-python-utils
+        state: present
+
+    - name: SELinux-Filecontext für das Backup-Verzeichnis definieren
+      ansible.builtin.command: >-
+        semanage fcontext -a -t ssh_home_t "{{ mssql_remote_dir }}/backup(/.*)?"
+      register: sftp_backup_semanage
+      changed_when: "'already defined' not in (sftp_backup_semanage.stderr | default(''))"
+      failed_when:
+        - sftp_backup_semanage.rc != 0
+        - "'already defined' not in (sftp_backup_semanage.stderr | default(''))"
+
+    - name: SELinux-Kontext auf das Backup-Verzeichnis anwenden
+      ansible.builtin.command: "restorecon -R {{ mssql_remote_dir }}"
+      changed_when: false

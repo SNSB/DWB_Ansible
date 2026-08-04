@@ -1,0 +1,23 @@
+---
+sftp_backup_manage: true
+
+# Chroot-Wurzel = dasselbe Verzeichnis, in das mssql_docker deployt (muss
+# root-eigen und nicht gruppen-/world-schreibbar sein - ist es bereits,
+# siehe roles/mssql_docker, Modus 0750, Owner root durch "become: true").
+sftp_backup_chroot_dir: "{{ mssql_remote_dir }}"
+
+# Pfad relativ zur Chroot-Wurzel (NICHT der reale Host-Pfad!). OpenSSH
+# interpretiert das "home" des Nutzers nach dem Chroot relativ zur
+# Chroot-Wurzel, "/backup" landet also faktisch in
+# "{{ mssql_remote_dir }}/backup" auf dem realen Dateisystem.
+sftp_backup_home: /backup
+
+# Shell-Pfad für den SFTP-only-Nutzer, je nach OS-Familie unterschiedlich.
+sftp_backup_shell_redhat: /sbin/nologin
+sftp_backup_shell_debian: /usr/sbin/nologin
+
+# Port, über den SFTP läuft (SFTP nutzt den normalen SSH-Port, kein
+# eigenständiges Protokoll). Separat von mssql_db_port/firewall_db_port,
+# damit beide Freigaben unabhängig voneinander steuerbar bleiben.
+sftp_backup_port: 22
+sftp_backup_firewall_manage: true

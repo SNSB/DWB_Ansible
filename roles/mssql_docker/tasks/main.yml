@@ -1,0 +1,66 @@
+---
+# Kopiert alle benötigten Dateien auf die VM, baut dort das Docker-Image
+# und startet den Stack via "docker compose" CLI. Bewusst nur
+# ansible.builtin-Module (copy, template, file, command) - keine
+# community.docker Collection.
+
+- name: Zielverzeichnis auf der VM anlegen
+  ansible.builtin.file:
+    path: "{{ mssql_remote_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Unterverzeichnisse für Datenbank- und Backup-Dateien anlegen
+  ansible.builtin.file:
+    path: "{{ mssql_remote_dir }}/{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - data
+    - backup
+
+- name: Statische Projektdateien kopieren (Dockerfile, SQL-Skripte)
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ mssql_remote_dir }}/{{ item }}"
+    mode: "0644"
+  loop:
+    - Dockerfile
+    - setup-admin-login.sql
+    - setup-backup-job.sql
+
+- name: docker-compose.yml rendern (Host-Port aus mssql_db_port)
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ mssql_remote_dir }}/docker-compose.yml"
+    mode: "0644"
+
+- name: Ausführbare Skripte kopieren
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ mssql_remote_dir }}/{{ item }}"
+    mode: "0755"
+  loop:
+    - entrypoint.sh
+    - toggle-sa.sh
+
+- name: .env mit Zugangsdaten aus dem Vault rendern
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ mssql_remote_dir }}/.env"
+    mode: "0600"
+  no_log: true # verhindert, dass Passwörter im Diff/Output landen
+
+- name: Docker-Image bauen
+  ansible.builtin.command:
+    cmd: docker compose build
+    chdir: "{{ mssql_remote_dir }}"
+  register: mssql_build
+  changed_when: "'CACHED' not in mssql_build.stdout"
+
+- name: Stack starten (idempotent - docker compose macht bei bestehendem, unverändertem Container nichts)
+  ansible.builtin.command:
+    cmd: docker compose up -d
+    chdir: "{{ mssql_remote_dir }}"
+  register: mssql_up
+  changed_when: "'Started' in mssql_up.stderr or 'Created' in mssql_up.stderr"

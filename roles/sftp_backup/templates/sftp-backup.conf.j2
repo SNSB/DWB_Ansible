@@ -1,0 +1,15 @@
+# Von Ansible verwaltet (roles/sftp_backup) - nicht manuell bearbeiten.
+#
+# Chrootet {{ sftp_backup_login }} auf {{ sftp_backup_chroot_dir }} und
+# erzwingt "internal-sftp -R": das -R sorgt dafür, dass sshd selbst jeden
+# Schreib-/Lösch-/Umbenennen-Versuch auf Protokollebene ablehnt, unabhängig
+# von den Dateisystemrechten (Verteidigung in der Tiefe zusätzlich zu den
+# reinen Lese-ACLs auf dem Backup-Verzeichnis).
+Match User {{ sftp_backup_login }}
+    ChrootDirectory {{ sftp_backup_chroot_dir }}
+    ForceCommand internal-sftp -R
+    PasswordAuthentication yes
+    AllowTcpForwarding no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTunnel no

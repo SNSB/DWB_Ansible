@@ -1,0 +1,20 @@
+# Nie eine unverschlüsselte Vault-Datei committen. Nur vault.example.yml
+# (Platzhalter-Werte) gehört ins Repo. Eine echte vault.yml darf nur
+# verschlüsselt (ansible-vault encrypt) committet werden - dafür diese
+# Zeile bei Bedarf entfernen, aber vorher sicherstellen, dass sie
+# tatsächlich verschlüsselt ist (git diff sollte "$ANSIBLE_VAULT;1.1;..."
+# zeigen, keinen Klartext).
+group_vars/all/vault.yml
+
+# Ansible-Laufzeit-Artefakte
+*.retry
+.vault_pass*
+
+# Vom Deploy erzeugte lokale Datenordner, falls versehentlich im
+# Projektverzeichnis statt auf der VM gelandet
+data/
+backup/
+
+*.pyc
+__pycache__/
+.DS_Store

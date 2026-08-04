@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  description: Chroot-SFTP-only-Lesezugang zum Backup-Verzeichnis, nur ansible.builtin
+  min_ansible_version: "2.14"
+
+dependencies: []
