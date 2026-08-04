@@ -7,5 +7,6 @@
     - role: docker_engine
     - role: mssql_docker
     - role: docker_cleanup
-    - role: firewall_db_port
+    - role: wireguard_server
     - role: sftp_backup
+    - role: ssh_allowlist

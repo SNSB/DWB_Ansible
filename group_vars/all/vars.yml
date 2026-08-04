@@ -7,13 +7,44 @@
 mssql_remote_dir: /opt/mssql-docker
 mssql_disable_sa: true
 
-# Host-Port, unter dem der SQL Server erreichbar ist (Docker-Portmapping UND
-# die von der firewall_db_port-Rolle freigegebene Firewall-Portnummer).
+# Host-Port, unter dem der SQL Server erreichbar ist - jetzt NUR NOCH über
+# die WireGuard-Tunnel-IP gebunden (siehe wireguard_server_ip), nicht mehr
+# öffentlich. roles/firewall_db_port ist dadurch obsolet und wird in
+# site.yml nicht mehr ausgeführt.
 mssql_db_port: 1433
 
 # Docker-Engine-Installation optional abschaltbar, falls auf der VM bereits
 # Docker + Compose-Plugin vorhanden sind.
 docker_engine_manage: true
+
+# --- WireGuard (roles/wireguard_server) ---
+# IP der VM im WireGuard-Overlay-Netz. Der SQL-Server-Port wird exakt an
+# diese Adresse gebunden (siehe mssql_docker/templates/docker-compose.yml.j2)
+# - von außerhalb des Tunnels ist der Port damit gar nicht erreichbar.
+wireguard_server_ip: 10.10.0.1
+wireguard_server_prefix: 24
+wireguard_listen_port: 51820
+
+# Liste der Peers (Nutzer/Geräte), die sich verbinden dürfen. Public Keys
+# sind NICHT geheim - anders als die übrigen Zugangsdaten gehören sie daher
+# bewusst hier in vars.yml und nicht in den Vault. Private Keys werden
+# clientseitig erzeugt und der Rolle nie mitgeteilt.
+# Beispiel:
+# wireguard_peers:
+#   - name: alice-laptop
+#     public_key: "AbCdEf...=="
+#     allowed_ip: 10.10.0.2/32
+#   - name: ci-runner
+#     public_key: "GhIjKl...=="
+#     allowed_ip: 10.10.0.3/32
+wireguard_peers: []
+
+# --- SSH/SFTP-Allowlist (roles/ssh_allowlist) ---
+# MUSS vor dem Anwenden befüllt werden - eine leere Liste würde den
+# öffentlichen SSH-Zugriff komplett gesperrt lassen (Rolle bricht mit
+# einem assert lieber ab, als das blind auszurollen). Eigene Admin-/
+# Büro-IP unbedingt mit aufnehmen, sonst sperrt ihr euch selbst aus.
+ssh_allowed_cidrs: []
 
 # --- aus dem Vault ---
 sa_password: "{{ vault_sa_password }}"

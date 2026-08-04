@@ -1,0 +1,114 @@
+---
+# Beschränkt SSH (und damit SFTP, siehe roles/sftp_backup - gleicher Port)
+# auf eine feste Liste von Quell-IP-Bereichen. Rein CLI-basiert
+# (firewall-cmd/ufw über ansible.builtin.command) - kein ansible.posix.
+#
+# WICHTIG: Rocky-Cloud-Images haben in der public-Zone standardmäßig den
+# Service "ssh" freigegeben - das erlaubt Zugriff von JEDER Quelle. Eine
+# Rich-Rule allein würde daran nichts ändern (die breite Regel lässt
+# weiterhin alle rein), diese Rolle entfernt den Service-Eintrag deshalb
+# explizit, bevor sie die Rich-Rules hinzufügt.
+#
+# SICHERHEITSHINWEIS: Bereits bestehende SSH-Verbindungen (inkl. der, über
+# die Ansible gerade läuft) werden von einer Firewall-Änderung normalerweise
+# NICHT gekappt (ESTABLISHED-Traffic bleibt erlaubt) - das gibt ein
+# Sicherheitsnetz, falls die eigene IP fälschlich fehlt. Trotzdem: vor dem
+# scharfen Einsatz unbedingt in einer zweiten, parallelen Sitzung testen.
+
+- name: Überspringen (ssh_allowlist_manage=false)
+  ansible.builtin.debug:
+    msg: "SSH-Allowlist wird übersprungen (ssh_allowlist_manage=false)."
+  when: not (ssh_allowlist_manage | bool)
+
+- name: Sicherstellen, dass die CIDR-Liste nicht leer ist
+  ansible.builtin.assert:
+    that:
+      - ssh_allowed_cidrs | length > 0
+    fail_msg: >-
+      ssh_allowed_cidrs ist leer. Das würde SSH/SFTP komplett sperren
+      (inklusive Ansibles eigenem Zugriff) - bitte mindestens die eigene
+      Admin-/Büro-IP eintragen, bevor diese Rolle läuft.
+    quiet: true
+  when: ssh_allowlist_manage | bool
+
+# ---------------------------------------------------------------------------
+# RHEL / Rocky / AlmaLinux - firewalld
+# ---------------------------------------------------------------------------
+- name: firewalld - freigegebene Services der public-Zone ermitteln
+  ansible.builtin.command: firewall-cmd --permanent --zone=public --list-services
+  register: ssh_allowlist_fw_services
+  changed_when: false
+  failed_when: false
+  when:
+    - ssh_allowlist_manage | bool
+    - ansible_os_family == "RedHat"
+
+- name: firewalld - CIDR-Allowlist einrichten
+  when:
+    - ssh_allowlist_manage | bool
+    - ansible_os_family == "RedHat"
+    - ssh_allowlist_fw_services is defined
+    - ssh_allowlist_fw_services.rc == 0
+  block:
+    - name: Pauschale "ssh"-Service-Freigabe entfernen
+      ansible.builtin.command: firewall-cmd --permanent --zone=public --remove-service=ssh
+      when: "'ssh' in ssh_allowlist_fw_services.stdout.split()"
+      register: ssh_allowlist_fw_service_removed
+
+    - name: Bestehende Rich-Rules der public-Zone ermitteln
+      ansible.builtin.command: firewall-cmd --permanent --zone=public --list-rich-rules
+      register: ssh_allowlist_fw_rich_rules
+      changed_when: false
+
+    - name: "Rich-Rule je erlaubtem CIDR hinzufügen (nur falls noch nicht vorhanden)"
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --zone=public --add-rich-rule=
+        'rule family="{{ 'ipv6' if ':' in item else 'ipv4' }}"
+        source address="{{ item }}"
+        port protocol="tcp" port="{{ ssh_allowlist_port }}" accept'
+      loop: "{{ ssh_allowed_cidrs }}"
+      when: >-
+        ('source address="' ~ item ~ '"') not in ssh_allowlist_fw_rich_rules.stdout
+      register: ssh_allowlist_fw_rules_added
+
+    - name: firewalld neu laden (nur bei tatsächlicher Änderung)
+      ansible.builtin.command: firewall-cmd --reload
+      when: >-
+        (ssh_allowlist_fw_service_removed is defined and ssh_allowlist_fw_service_removed is changed)
+        or (ssh_allowlist_fw_rules_added.results is defined and ssh_allowlist_fw_rules_added.results | selectattr('changed') | list | length > 0)
+
+# ---------------------------------------------------------------------------
+# Debian / Ubuntu - ufw (Bonus, best effort)
+# ---------------------------------------------------------------------------
+- name: ufw - Status ermitteln
+  ansible.builtin.command: ufw status
+  register: ssh_allowlist_ufw_status
+  changed_when: false
+  failed_when: false
+  when:
+    - ssh_allowlist_manage | bool
+    - ansible_os_family == "Debian"
+
+- name: ufw - CIDR-Allowlist einrichten
+  when:
+    - ssh_allowlist_manage | bool
+    - ansible_os_family == "Debian"
+    - ssh_allowlist_ufw_status is defined
+    - ssh_allowlist_ufw_status.rc == 0
+    - "'Status: active' in ssh_allowlist_ufw_status.stdout"
+  block:
+    - name: Pauschale Freigaben für den SSH-Port entfernen (OpenSSH-Profil und Rohport)
+      ansible.builtin.command: "ufw delete allow {{ item }}"
+      loop:
+        - "OpenSSH"
+        - "{{ ssh_allowlist_port }}/tcp"
+      register: ssh_allowlist_ufw_removed
+      changed_when: "'Skipping' not in ssh_allowlist_ufw_removed.stdout"
+      failed_when: false
+
+    - name: "Regel je erlaubtem CIDR hinzufügen"
+      ansible.builtin.command: >-
+        ufw allow from {{ item }} to any port {{ ssh_allowlist_port }} proto tcp
+      loop: "{{ ssh_allowed_cidrs }}"
+      register: ssh_allowlist_ufw_added
+      changed_when: "'Skipping' not in ssh_allowlist_ufw_added.stdout"

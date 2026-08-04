@@ -1,0 +1,13 @@
+---
+wireguard_server_manage: true
+
+wireguard_interface: wg0
+wireguard_config_dir: /etc/wireguard
+wireguard_config_path: "{{ wireguard_config_dir }}/{{ wireguard_interface }}.conf"
+wireguard_private_key_path: "{{ wireguard_config_dir }}/{{ wireguard_interface }}-private.key"
+wireguard_public_key_path: "{{ wireguard_config_dir }}/{{ wireguard_interface }}-public.key"
+
+# Name der firewalld-Zone, der das wg0-Interface zugeordnet wird. Nur
+# Traffic, der über diese Zone läuft, darf auf mssql_db_port zugreifen -
+# die public-Zone (physisches Interface) bekommt den DB-Port nie geöffnet.
+wireguard_firewalld_zone: wireguard

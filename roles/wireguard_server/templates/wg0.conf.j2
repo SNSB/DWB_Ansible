@@ -1,0 +1,22 @@
+# Von Ansible verwaltet (roles/wireguard_server) - nicht manuell bearbeiten.
+# Änderungen an Peers: wireguard_peers in group_vars/all/vars.yml pflegen
+# und die Rolle erneut ausführen.
+
+[Interface]
+Address = {{ wireguard_server_ip }}/{{ wireguard_server_prefix }}
+ListenPort = {{ wireguard_listen_port }}
+PrivateKey = {{ wireguard_server_private_key }}
+# Kein PostUp/PostDown mit MASQUERADE/FORWARD nötig: die Peers sprechen nur
+# mit Diensten auf dieser VM selbst (SQL Server), es wird kein Traffic zu
+# externen Zielen weitergeleitet. net.ipv4.ip_forward bleibt bewusst aus.
+
+{% for peer in wireguard_peers %}
+# {{ peer.name }}
+[Peer]
+PublicKey = {{ peer.public_key }}
+AllowedIPs = {{ peer.allowed_ip }}
+{% if peer.preshared_key is defined %}
+PresharedKey = {{ peer.preshared_key }}
+{% endif %}
+
+{% endfor %}

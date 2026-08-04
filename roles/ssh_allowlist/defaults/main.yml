@@ -1,0 +1,16 @@
+---
+ssh_allowlist_manage: true
+
+# Port, auf dem sshd (und damit auch SFTP, siehe roles/sftp_backup) lauscht.
+# Eigene Variable statt Wiederverwendung von sftp_backup_port, damit diese
+# Rolle auch unabhängig von sftp_backup nutzbar bleibt - beide MÜSSEN aber
+# denselben Wert haben, falls sshd auf einem nicht-Standard-Port läuft.
+ssh_allowlist_port: 22
+
+# MUSS befüllt werden - eine leere Liste lässt die Rolle bewusst mit einem
+# Fehler abbrechen, statt den öffentlichen Zugriff komplett zu sperren.
+# Beispiel:
+# ssh_allowed_cidrs:
+#   - 203.0.113.0/24
+#   - 198.51.100.42/32
+ssh_allowed_cidrs: []

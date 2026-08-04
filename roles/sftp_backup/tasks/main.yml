@@ -92,66 +92,14 @@
   when: sftp_backup_manage | bool
 
 # ---------------------------------------------------------------------------
-# Firewall - SFTP läuft über den normalen SSH-Port, kein eigenes Protokoll.
-# Gleiches Muster wie roles/firewall_db_port, aber eigenständig über
-# sftp_backup_firewall_manage/sftp_backup_port steuerbar. Rein CLI-basiert
-# (firewall-cmd/ufw über ansible.builtin.command) - kein ansible.posix.
+# Firewall: KEINE eigene Portfreigabe mehr in dieser Rolle. SFTP läuft über
+# den normalen SSH-Port - eine pauschale Freigabe hier würde die
+# quellbeschränkte Allowlist aus roles/ssh_allowlist unterlaufen (eine
+# breite "port offen für alle"-Regel neben einer restriktiven Rich-Rule
+# macht die Restriktion wirkungslos). Firewall-Freigabe für diesen Port ist
+# daher bewusst Aufgabe von roles/ssh_allowlist, die in site.yml nach
+# dieser Rolle läuft.
 # ---------------------------------------------------------------------------
-- name: firewalld - Status ermitteln (SFTP-Port)
-  ansible.builtin.command: firewall-cmd --state
-  register: sftp_backup_firewalld_state
-  changed_when: false
-  failed_when: false
-  when:
-    - sftp_backup_manage | bool
-    - sftp_backup_firewall_manage | bool
-    - ansible_os_family == "RedHat"
-
-- name: firewalld - SFTP/SSH-Port freigeben
-  when:
-    - sftp_backup_manage | bool
-    - sftp_backup_firewall_manage | bool
-    - ansible_os_family == "RedHat"
-    - sftp_backup_firewalld_state is defined
-    - sftp_backup_firewalld_state.rc == 0
-  block:
-    - name: Prüfen, ob der Port bereits dauerhaft freigegeben ist
-      ansible.builtin.command: >-
-        firewall-cmd --permanent --query-port={{ sftp_backup_port }}/tcp
-      register: sftp_backup_firewalld_port_check
-      changed_when: false
-      failed_when: false
-
-    - name: "Port {{ sftp_backup_port }}/tcp dauerhaft freigeben"
-      ansible.builtin.command: >-
-        firewall-cmd --permanent --add-port={{ sftp_backup_port }}/tcp
-      when: sftp_backup_firewalld_port_check.rc != 0
-      register: sftp_backup_firewalld_port_add
-
-    - name: firewalld neu laden (nur bei Änderung)
-      ansible.builtin.command: firewall-cmd --reload
-      when: sftp_backup_firewalld_port_add is changed
-
-- name: ufw - Status ermitteln (SFTP-Port)
-  ansible.builtin.command: ufw status
-  register: sftp_backup_ufw_status
-  changed_when: false
-  failed_when: false
-  when:
-    - sftp_backup_manage | bool
-    - sftp_backup_firewall_manage | bool
-    - ansible_os_family == "Debian"
-
-- name: "ufw - Port {{ sftp_backup_port }}/tcp freigeben"
-  ansible.builtin.command: "ufw allow {{ sftp_backup_port }}/tcp"
-  when:
-    - sftp_backup_manage | bool
-    - sftp_backup_firewall_manage | bool
-    - ansible_os_family == "Debian"
-    - sftp_backup_ufw_status is defined
-    - sftp_backup_ufw_status.rc == 0
-    - "'Status: active' in sftp_backup_ufw_status.stdout"
-    - (sftp_backup_port | string) + '/tcp' not in sftp_backup_ufw_status.stdout
 
 # ---------------------------------------------------------------------------
 # SELinux (nur RedHat-Familie, best effort) - Rocky 10 läuft standardmäßig

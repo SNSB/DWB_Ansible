@@ -1,0 +1,240 @@
+---
+# Installiert/konfiguriert WireGuard als reinen "Zugangs-Hub": Peers
+# sprechen nur mit Diensten auf dieser VM (SQL Server), kein Forwarding zu
+# externen Zielen - daher kein IP-Forwarding/NAT nötig. Nur
+# ansible.builtin-Module bzw. Standard-CLI-Tools (wg, firewall-cmd) über
+# ansible.builtin.command.
+
+- name: Überspringen (wireguard_server_manage=false)
+  ansible.builtin.debug:
+    msg: "WireGuard-Setup wird übersprungen (wireguard_server_manage=false)."
+  when: not (wireguard_server_manage | bool)
+
+- name: Sicherstellen, dass mindestens eine Kernvoraussetzung stimmt
+  ansible.builtin.assert:
+    that:
+      - wireguard_server_ip is defined
+      - wireguard_listen_port is defined
+    fail_msg: "wireguard_server_ip und wireguard_listen_port müssen gesetzt sein."
+    quiet: true
+  when: wireguard_server_manage | bool
+
+# ---------------------------------------------------------------------------
+# Pakete (RedHat: EPEL nötig, Kernelmodul ist auf Rocky 10 bereits im
+# Mainline-Kernel enthalten - kein kmod-wireguard/ELRepo erforderlich)
+# ---------------------------------------------------------------------------
+- name: EPEL-Repository installieren (RedHat-Familie)
+  ansible.builtin.package:
+    name: epel-release
+    state: present
+  when:
+    - wireguard_server_manage | bool
+    - ansible_os_family == "RedHat"
+
+- name: wireguard-tools installieren
+  ansible.builtin.package:
+    name: wireguard-tools
+    state: present
+  when: wireguard_server_manage | bool
+
+- name: WireGuard-Kernelmodul prüfen
+  ansible.builtin.command: modprobe wireguard
+  register: wireguard_modprobe
+  changed_when: false
+  failed_when: false
+  when: wireguard_server_manage | bool
+
+- name: Warnen, falls das Kernelmodul nicht geladen werden konnte
+  ansible.builtin.debug:
+    msg: >-
+      WARNUNG: "modprobe wireguard" ist fehlgeschlagen
+      ({{ wireguard_modprobe.stderr | default('') }}). Der Kernel dieser VM
+      bringt WireGuard evtl. nicht mit - ggf. ein DKMS-Paket nötig.
+  when:
+    - wireguard_server_manage | bool
+    - wireguard_modprobe is defined
+    - wireguard_modprobe.rc != 0
+
+# ---------------------------------------------------------------------------
+# Server-Schlüsselpaar (einmalig generieren, danach unangetastet lassen)
+# ---------------------------------------------------------------------------
+- name: Konfigurationsverzeichnis anlegen
+  ansible.builtin.file:
+    path: "{{ wireguard_config_dir }}"
+    state: directory
+    mode: "0700"
+  when: wireguard_server_manage | bool
+
+- name: Prüfen, ob bereits ein Server-Schlüsselpaar existiert
+  ansible.builtin.stat:
+    path: "{{ wireguard_private_key_path }}"
+  register: wireguard_private_key_stat
+  when: wireguard_server_manage | bool
+
+- name: Server-Schlüsselpaar generieren (nur beim ersten Lauf)
+  when:
+    - wireguard_server_manage | bool
+    - not wireguard_private_key_stat.stat.exists
+  block:
+    - name: Private Key erzeugen
+      ansible.builtin.shell: umask 077 && wg genkey > {{ wireguard_private_key_path }}
+      args:
+        creates: "{{ wireguard_private_key_path }}"
+
+    - name: Public Key daraus ableiten
+      ansible.builtin.shell: >-
+        wg pubkey < {{ wireguard_private_key_path }} > {{ wireguard_public_key_path }}
+      args:
+        creates: "{{ wireguard_public_key_path }}"
+
+    - name: Zugriffsrechte auf den privaten Schlüssel setzen
+      ansible.builtin.file:
+        path: "{{ wireguard_private_key_path }}"
+        mode: "0600"
+
+- name: Privaten Schlüssel für die Config einlesen
+  ansible.builtin.slurp:
+    src: "{{ wireguard_private_key_path }}"
+  register: wireguard_private_key_slurp
+  when: wireguard_server_manage | bool
+
+- name: Fakt für den privaten Schlüssel setzen
+  ansible.builtin.set_fact:
+    wireguard_server_private_key: "{{ (wireguard_private_key_slurp.content | b64decode).strip() }}"
+  when: wireguard_server_manage | bool
+  no_log: true
+
+- name: Öffentlichen Schlüssel auslesen (nur zur Anzeige am Ende)
+  ansible.builtin.slurp:
+    src: "{{ wireguard_public_key_path }}"
+  register: wireguard_public_key_slurp
+  when: wireguard_server_manage | bool
+
+# ---------------------------------------------------------------------------
+# Konfiguration + Dienst
+# ---------------------------------------------------------------------------
+- name: wg0.conf rendern
+  ansible.builtin.template:
+    src: wg0.conf.j2
+    dest: "{{ wireguard_config_path }}"
+    mode: "0600"
+  notify: wg0 neu starten
+  when: wireguard_server_manage | bool
+  no_log: true # Template enthält den privaten Schlüssel
+
+- name: wg-quick@{{ wireguard_interface }} aktivieren und starten
+  ansible.builtin.service:
+    name: "wg-quick@{{ wireguard_interface }}"
+    state: started
+    enabled: true
+  when: wireguard_server_manage | bool
+
+# ---------------------------------------------------------------------------
+# firewalld: eigene Zone für wg0, DB-Port NUR dort offen, Handshake-Port
+# (UDP) in der public-Zone für eingehende Verbindungen von Peers.
+# Rein CLI-basiert (firewall-cmd über ansible.builtin.command) - kein
+# ansible.posix.firewalld.
+# ---------------------------------------------------------------------------
+- name: firewalld - vorhandene Zonen ermitteln
+  ansible.builtin.command: firewall-cmd --permanent --get-zones
+  register: wireguard_fw_zones
+  changed_when: false
+  failed_when: false
+  when:
+    - wireguard_server_manage | bool
+    - ansible_os_family == "RedHat"
+
+- name: firewalld - WireGuard-Zone anlegen und konfigurieren
+  when:
+    - wireguard_server_manage | bool
+    - ansible_os_family == "RedHat"
+    - wireguard_fw_zones is defined
+    - wireguard_fw_zones.rc == 0
+  block:
+    - name: Zone anlegen, falls noch nicht vorhanden
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --new-zone={{ wireguard_firewalld_zone }}
+      when: wireguard_firewalld_zone not in (wireguard_fw_zones.stdout.split())
+      register: wireguard_fw_zone_created
+
+    - name: wg0-Interface der Zone zuordnen
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --zone={{ wireguard_firewalld_zone }}
+        --list-interfaces
+      register: wireguard_fw_zone_interfaces
+      changed_when: false
+
+    - name: Interface hinzufügen, falls noch nicht zugeordnet
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --zone={{ wireguard_firewalld_zone }}
+        --add-interface={{ wireguard_interface }}
+      when: wireguard_interface not in wireguard_fw_zone_interfaces.stdout.split()
+      register: wireguard_fw_zone_interface_added
+
+    - name: Offene Ports der Zone ermitteln
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --zone={{ wireguard_firewalld_zone }}
+        --list-ports
+      register: wireguard_fw_zone_ports
+      changed_when: false
+
+    - name: DB-Port in der WireGuard-Zone freigeben
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --zone={{ wireguard_firewalld_zone }}
+        --add-port={{ mssql_db_port }}/tcp
+      when: (mssql_db_port ~ '/tcp') not in wireguard_fw_zone_ports.stdout.split()
+      register: wireguard_fw_zone_port_added
+
+    - name: Offene Ports der public-Zone ermitteln
+      ansible.builtin.command: firewall-cmd --permanent --zone=public --list-ports
+      register: wireguard_fw_public_ports
+      changed_when: false
+
+    - name: WireGuard-Handshake-Port (UDP) in der public-Zone freigeben
+      ansible.builtin.command: >-
+        firewall-cmd --permanent --zone=public
+        --add-port={{ wireguard_listen_port }}/udp
+      when: (wireguard_listen_port ~ '/udp') not in wireguard_fw_public_ports.stdout.split()
+      register: wireguard_fw_public_port_added
+
+    - name: firewalld neu laden (nur bei tatsächlicher Änderung)
+      ansible.builtin.command: firewall-cmd --reload
+      when: >-
+        (wireguard_fw_zone_created is defined and wireguard_fw_zone_created is changed)
+        or (wireguard_fw_zone_interface_added is defined and wireguard_fw_zone_interface_added is changed)
+        or (wireguard_fw_zone_port_added is defined and wireguard_fw_zone_port_added is changed)
+        or (wireguard_fw_public_port_added is defined and wireguard_fw_public_port_added is changed)
+
+- name: Serverinformationen ausgeben
+  ansible.builtin.debug:
+    msg:
+      - "wg0 läuft mit Endpoint {{ ansible_host | default('<VM-IP>') }}:{{ wireguard_listen_port }}"
+      - "Server-Public-Key: {{ (wireguard_public_key_slurp.content | b64decode).strip() }}"
+      - "Diesen Public Key brauchen alle Clients für ihre eigene [Peer]-Sektion."
+  when: wireguard_server_manage | bool
+
+# ---------------------------------------------------------------------------
+# ufw (Debian, Bonus/best effort) - öffnet nur den Handshake-Port. ufw kennt
+# kein Zonen-Konzept wie firewalld, daher gibt es hier KEIN Äquivalent zur
+# interface-basierten DB-Port-Beschränkung oben. Auf Debian müsste die
+# DB-Port-Bindung an wireguard_server_ip (siehe docker-compose.yml.j2)
+# alleine als Schutz reichen - siehe README für Details.
+# ---------------------------------------------------------------------------
+- name: ufw - Status ermitteln
+  ansible.builtin.command: ufw status
+  register: wireguard_ufw_status
+  changed_when: false
+  failed_when: false
+  when:
+    - wireguard_server_manage | bool
+    - ansible_os_family == "Debian"
+
+- name: "ufw - WireGuard-Handshake-Port {{ wireguard_listen_port }}/udp freigeben"
+  ansible.builtin.command: "ufw allow {{ wireguard_listen_port }}/udp"
+  when:
+    - wireguard_server_manage | bool
+    - ansible_os_family == "Debian"
+    - wireguard_ufw_status is defined
+    - wireguard_ufw_status.rc == 0
+    - "'Status: active' in wireguard_ufw_status.stdout"
+    - (wireguard_listen_port | string) + '/udp' not in wireguard_ufw_status.stdout

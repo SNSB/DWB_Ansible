@@ -17,7 +17,9 @@ sftp_backup_shell_redhat: /sbin/nologin
 sftp_backup_shell_debian: /usr/sbin/nologin
 
 # Port, über den SFTP läuft (SFTP nutzt den normalen SSH-Port, kein
-# eigenständiges Protokoll). Separat von mssql_db_port/firewall_db_port,
-# damit beide Freigaben unabhängig voneinander steuerbar bleiben.
+# eigenständiges Protokoll). Rein informativ für die sshd-Config hier -
+# die eigentliche Firewall-Freigabe (quellbeschränkt) übernimmt
+# roles/ssh_allowlist über die eigene Variable ssh_allowlist_port. Beide
+# MÜSSEN denselben Wert haben, falls sshd auf einem Nicht-Standard-Port
+# läuft.
 sftp_backup_port: 22
-sftp_backup_firewall_manage: true

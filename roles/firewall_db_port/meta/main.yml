@@ -1,6 +1,0 @@
----
-galaxy_info:
-  description: Gibt den konfigurierbaren DB-Port in der Host-Firewall frei (firewalld/ufw, nur ansible.builtin)
-  min_ansible_version: "2.14"
-
-dependencies: []

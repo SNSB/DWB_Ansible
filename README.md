@@ -2,22 +2,31 @@
 
 Deployt den zuvor gebauten MSSQL-Docker-Stack (Dockerfile, Compose-Datei,
 SQL-Server-Agent-Backup-Job, sa-Sperrung) automatisiert auf eine VM. Räumt
-nach dem Build nicht mehr benötigte Docker-Images auf, gibt den
-konfigurierbaren Datenbank-Port in der Host-Firewall frei, und richtet
-einen chroot-beschränkten SFTP-only-Nutzer mit Lesezugriff auf die
-Backup-Dateien ein.
+nach dem Build nicht mehr benötigte Docker-Images auf, richtet einen
+chroot-beschränkten SFTP-only-Nutzer mit Lesezugriff auf die Backup-Dateien
+ein - und sichert den Netzwerkzugriff zweigleisig ab:
+
+- **SQL Server**: nur über WireGuard erreichbar. Der DB-Port ist nicht mal
+  an `0.0.0.0` gebunden, sondern ausschließlich an die WireGuard-Tunnel-IP
+  der VM - ohne gültigen Peer-Schlüssel kommt niemand auch nur in die Nähe
+  eines Login-Prompts.
+- **SSH/SFTP**: bleiben auf dem normalen öffentlichen Port, aber
+  beschränkt auf eine feste Liste von Quell-IP-Bereichen (Firewall-
+  Allowlist). Bewusst *kein* WireGuard-Zwang hier, damit der
+  Ansible-Zugang nicht von einem funktionierenden VPN-Tunnel abhängt.
 
 **Nur `ansible.builtin`-Module** — keine `community.*` (und auch keine
-`ansible.posix`) Collections nötig. Docker, Firewall und SFTP werden über
-die jeweiligen CLIs (`docker compose`, `firewall-cmd`/`ufw`, `setfacl`,
-`semanage`) via `ansible.builtin.command` angesteuert.
+`ansible.posix`) Collections nötig. Docker, Firewall, WireGuard und SFTP
+werden über die jeweiligen CLIs (`docker compose`, `firewall-cmd`/`ufw`,
+`wg`/`wg-quick`, `setfacl`, `semanage`) via `ansible.builtin.command`
+angesteuert.
 
 ## Struktur
 
 ```
 .
 ├── ansible.cfg
-├── site.yml                        # Playbook, führt alle vier Rollen aus
+├── site.yml                        # Playbook, führt alle sechs Rollen aus
 ├── inventory/
 │   └── hosts.ini                   # VM(s) eintragen
 ├── group_vars/all/
@@ -33,7 +42,7 @@ die jeweiligen CLIs (`docker compose`, `firewall-cmd`/`ufw`, `setfacl`,
     │   ├── tasks/main.yml
     │   ├── templates/
     │   │   ├── env.j2                    # rendert .env aus den Vault-Secrets
-    │   │   └── docker-compose.yml.j2     # Host-Port aus mssql_db_port
+    │   │   └── docker-compose.yml.j2     # DB-Port an wireguard_server_ip gebunden
     │   ├── files/                  # 1:1 aus dem vorherigen Docker-Projekt
     │   │   ├── Dockerfile
     │   │   ├── entrypoint.sh
@@ -45,15 +54,21 @@ die jeweiligen CLIs (`docker compose`, `firewall-cmd`/`ufw`, `setfacl`,
     │   ├── defaults/main.yml
     │   ├── tasks/main.yml
     │   └── meta/main.yml
-    ├── firewall_db_port/            # gibt mssql_db_port in der Host-Firewall frei
+    ├── wireguard_server/             # WireGuard-Hub, DB-Port nur über den Tunnel
     │   ├── defaults/main.yml
     │   ├── tasks/main.yml
+    │   ├── handlers/main.yml
+    │   ├── templates/wg0.conf.j2
     │   └── meta/main.yml
-    └── sftp_backup/                 # SFTP-only-Lesezugang auf ./backup
+    ├── sftp_backup/                 # SFTP-only-Lesezugang auf ./backup
+    │   ├── defaults/main.yml
+    │   ├── tasks/main.yml
+    │   ├── handlers/main.yml
+    │   ├── templates/sftp-backup.conf.j2
+    │   └── meta/main.yml
+    └── ssh_allowlist/                # SSH/SFTP nur von festen Quell-CIDRs
         ├── defaults/main.yml
         ├── tasks/main.yml
-        ├── handlers/main.yml
-        ├── templates/sftp-backup.conf.j2
         └── meta/main.yml
 ```
 
@@ -92,7 +107,25 @@ Text, ein `'` würde das SQL-Skript zerbrechen.
 solange sie tatsächlich verschlüsselt ist — nie die Klartext-Version
 committen.
 
-### 3. Playbook ausführen
+### 3. SSH/SFTP-Allowlist befüllen (Pflicht)
+
+`ssh_allowed_cidrs` in `group_vars/all/vars.yml` **muss** vor dem ersten
+Lauf mindestens die eigene Admin-/Büro-IP enthalten:
+
+```yaml
+ssh_allowed_cidrs:
+  - 203.0.113.0/24      # z. B. Büro-/VPN-Netz
+  - 198.51.100.42/32    # z. B. einzelner Admin-Rechner
+```
+
+Bleibt die Liste leer, bricht `ssh_allowlist` mit einem `assert` ab, statt
+den Zugriff versehentlich komplett zu sperren — das Playbook schlägt dann
+kontrolliert fehl, statt euch auszusperren. Trotzdem gilt: vor dem
+produktiven Einsatz in einer zweiten, parallelen Sitzung testen (siehe
+Abschnitt zur `ssh_allowlist`-Rolle weiter unten für Details zum
+Sicherheitsnetz bei bestehenden Verbindungen).
+
+### 4. Playbook ausführen
 
 ```bash
 ansible-playbook site.yml --ask-vault-pass
@@ -158,8 +191,10 @@ der VM bereits vorhanden ist. Am Ende wird zusätzlich mit
    Unterordner `data/` und `backup/` auf der VM an.
 2. Kopiert `Dockerfile` und die SQL-Skripte unverändert aus `files/`.
 3. Rendert `docker-compose.yml` aus `templates/docker-compose.yml.j2` — der
-   Host-Port kommt aus `mssql_db_port` (Standard `1433`), damit er garantiert
-   mit dem von `firewall_db_port` freigegebenen Port übereinstimmt.
+   Container-Port wird an `wireguard_server_ip:{{ mssql_db_port }}` gebunden
+   (nicht `0.0.0.0`), sodass er nur über den WireGuard-Tunnel erreichbar ist
+   und garantiert mit dem von `wireguard_server` in der eigenen firewalld-
+   Zone freigegebenen Port übereinstimmt.
 4. Kopiert `entrypoint.sh` und `toggle-sa.sh` mit Ausführungsrechten (0755).
 5. Rendert `.env` aus `templates/env.j2` mit den Vault-Secrets, Modus 0600.
    `no_log: true` verhindert, dass Passwörter im Ansible-Output auftauchen.
@@ -195,28 +230,57 @@ entstandenen Layer-Müll wieder freizugeben:
 - Gibt am Ende in `Freigegebenen Speicherplatz melden` aus, wie viel
   Speicherplatz jeweils zurückgewonnen wurde.
 
-### `firewall_db_port`
+### `wireguard_server`
 
-Gibt `mssql_db_port/tcp` (Standard `1433`) in der Host-Firewall der VM frei
-— läuft nach `mssql_docker`, damit der freigegebene Port garantiert dem
-tatsächlich in `docker-compose.yml` veröffentlichten entspricht.
+Richtet die VM als reinen **Zugangs-Hub** für den SQL-Server-Port ein — kein
+Router, kein Forwarding zu externen Zielen, `net.ipv4.ip_forward` bleibt
+bewusst aus, weil Peers ausschließlich mit Diensten auf dieser VM selbst
+sprechen.
 
-- **Primäres Ziel: firewalld** (`ansible_os_family == "RedHat"`, Rockys
-  Standard-Firewall). Prüft per `firewall-cmd --permanent --query-port`,
-  ob der Port schon freigegeben ist, fügt ihn nur bei Bedarf hinzu
-  (`--add-port`) und lädt die Firewall nur bei tatsächlicher Änderung neu
-  (`--reload`) — mehrfache Playbook-Läufe erzeugen also kein unnötiges
-  Reload.
-- **Bonus: ufw** (`ansible_os_family == "Debian"`) — analog, aber weniger
-  intensiv getestet, da die Ziel-VM Rocky ist.
-- Bewusst **kein** `ansible.posix.firewalld`-Modul, sondern reine
-  `firewall-cmd`/`ufw`-CLI-Aufrufe über `ansible.builtin.command` — `ansible.
-  posix` ist eine separate Collection und fällt damit unter dieselbe
-  "nur Standard-Ansible-Tools"-Vorgabe wie `community.*`.
-- Ist weder firewalld noch ufw aktiv (z. B. weil der Zugriff über eine
-  Cloud-Security-Group statt Host-Firewall geregelt wird), gibt die Rolle
-  nur eine Debug-Meldung aus und bricht nicht ab. Mit
-  `firewall_manage: false` komplett abschaltbar.
+1. Installiert `wireguard-tools` (RedHat-Familie: vorher `epel-release`,
+   da `wireguard-tools` dort nicht in den Standard-Repos liegt). Das
+   Kernelmodul selbst ist auf Rocky 10 bereits im Mainline-Kernel (≥5.6)
+   enthalten — kein `kmod-wireguard`/ELRepo nötig. `modprobe wireguard`
+   wird trotzdem geprüft und warnt (statt hart abzubrechen), falls es
+   fehlschlägt.
+2. Generiert **einmalig** ein Server-Schlüsselpaar (`wg genkey`/`wg
+   pubkey`) in `/etc/wireguard/` — bei erneuten Läufen bleibt ein
+   bestehendes Schlüsselpaar unangetastet (`creates:`-Guard).
+3. Rendert `wg0.conf` aus `wireguard_peers` (Liste aus `name`,
+   `public_key`, `allowed_ip`, optional `preshared_key`) — **Public Keys
+   sind nicht geheim** und liegen deshalb bewusst in `vars.yml`, nicht im
+   Vault. Private Keys werden clientseitig erzeugt und der Rolle nie
+   mitgeteilt. `no_log: true` auf den relevanten Tasks, da die
+   *Server*-Config den *Server*-Private-Key enthält.
+4. Aktiviert/startet `wg-quick@wg0`.
+5. **firewalld-Zonentrennung** (RedHat-Familie): legt eine eigene Zone
+   (`wireguard`) an, ordnet ihr das `wg0`-Interface zu und öffnet
+   `mssql_db_port` **ausschließlich dort** — die `public`-Zone (physisches
+   Interface) bekommt diesen Port nie zu Gesicht. Der WireGuard-
+   Handshake-Port selbst (`wireguard_listen_port/udp`, Standard `51820`)
+   wird in der `public`-Zone geöffnet, da Peers von außen kommen müssen —
+   das ist unproblematisch, weil WireGuard auf Pakete ohne gültigen
+   Peer-Schlüssel schlicht nicht antwortet (kein Handshake, keine
+   Angriffsfläche wie bei einem TCP-Login-Prompt).
+6. **ufw (Debian, Bonus/best effort):** öffnet nur den Handshake-Port. ufw
+   kennt kein Zonen-Konzept wie firewalld — auf Debian gibt es also kein
+   Äquivalent zur Interface-basierten DB-Port-Beschränkung aus Schritt 5.
+   Dort trägt allein die Portbindung an `wireguard_server_ip` (statt
+   `0.0.0.0`) in `docker-compose.yml` den Schutz.
+7. Gibt am Ende den **Server-Public-Key** aus, den jeder Client für seine
+   eigene `[Peer]`-Sektion braucht.
+
+Peer hinzufügen: Client generiert eigenes Schlüsselpaar
+(`wg genkey | tee privatekey | wg pubkey > publickey`), teilt nur den
+Public Key mit, der landet in `wireguard_peers` in `group_vars/all/
+vars.yml`. Playbook erneut ausführen — bestehende Peers/das Server-
+Schlüsselpaar bleiben unangetastet, nur die Peer-Liste in `wg0.conf` wird
+neu geschrieben.
+
+Mit `wireguard_server_manage: false` komplett abschaltbar (dann bräuchte
+`docker-compose.yml` wieder eine andere Portbindung als
+`wireguard_server_ip`, z. B. `0.0.0.0` oder `127.0.0.1` — siehe die
+frühere Diskussion zu Bind-Optionen für den DB-Port).
 
 ### `sftp_backup`
 
@@ -264,19 +328,10 @@ Zugangsdaten.
    Rolle prüft den Status (`getenforce`) und setzt bei Bedarf
    `ssh_home_t` per `semanage fcontext` + `restorecon` — nur wenn SELinux
    tatsächlich `Enforcing` ist, sonst wird dieser Teil übersprungen.
-6. **Firewall:** gibt `sftp_backup_port/tcp` (Standard `22`, derselbe Port
-   wie SSH — SFTP ist kein eigenständiges Protokoll, sondern läuft über
-   die SSH-Verbindung) in der Host-Firewall frei. Exakt dasselbe Muster wie
-   in `firewall_db_port` (firewalld primär via `firewall-cmd
-   --permanent --query-port` / `--add-port`, ufw als Bonus für Debian,
-   Reload nur bei tatsächlicher Änderung), aber mit eigener Variable
-   (`sftp_backup_firewall_manage`) unabhängig von `firewall_manage`
-   steuerbar — falls der SFTP-Zugang z. B. nur aus dem internen Netz
-   erreichbar sein soll, während der DB-Port öffentlich bleibt (oder
-   umgekehrt). Läuft üblicherweise ins Leere, da Port 22 auf den meisten
-   VMs (inkl. der, über die Ansible selbst verbindet) ohnehin schon offen
-   ist — schadet aber nicht und deckt den Fall ab, dass SFTP absichtlich
-   auf einem anderen Port als der administrative SSH-Zugang laufen soll.
+6. **Firewall:** keine eigene Portfreigabe mehr in dieser Rolle — SFTP läuft
+   über den normalen SSH-Port, dessen Freigabe (quellbeschränkt) übernimmt
+   `roles/ssh_allowlist` (läuft danach). Eine pauschale Freigabe hier würde
+   die dortige Allowlist unterlaufen.
 
 Zugriff testen:
 
@@ -287,9 +342,42 @@ sftp> get <dateiname>.bak
 sftp> put test.txt   # muss mit "Permission denied" fehlschlagen
 ```
 
-Mit `sftp_backup_manage: false` komplett abschaltbar (schließt auch die
-Firewall-Freigabe mit ein). Nur die Firewall-Freigabe separat abschalten:
-`sftp_backup_firewall_manage: false`.
+Mit `sftp_backup_manage: false` komplett abschaltbar.
+
+### `ssh_allowlist`
+
+Beschränkt SSH — und damit auch SFTP, da beide über denselben Port laufen
+— auf eine feste Liste von Quell-IP-Bereichen (`ssh_allowed_cidrs`).
+
+- **Sicherheitsbremse:** Die Rolle bricht mit einem `assert` ab, wenn
+  `ssh_allowed_cidrs` leer ist, statt den Zugriff versehentlich komplett
+  zu sperren (inklusive Ansibles eigenem Zugang). **Die eigene Admin-/
+  Büro-IP muss vor dem Ausrollen in dieser Liste stehen.**
+- **Wichtiger Kniff bei firewalld:** Rocky-Cloud-Images haben in der
+  `public`-Zone standardmäßig den Service `ssh` freigegeben — das erlaubt
+  Zugriff von *jeder* Quelle. Eine zusätzliche Rich-Rule allein würde
+  daran nichts ändern (die breite Regel lässt weiterhin alle rein), die
+  Rolle entfernt den `ssh`-Service-Eintrag deshalb explizit
+  (`firewall-cmd --remove-service=ssh`), bevor sie pro CIDR eine
+  quellbeschränkte Rich-Rule hinzufügt
+  (`rule family="ipv4|ipv6" source address="..." port protocol="tcp"
+  port="22" accept` — Familie wird anhand des `:` im CIDR automatisch
+  erkannt).
+- **ufw (Debian, Bonus):** entfernt analog das `OpenSSH`-Profil und eine
+  eventuelle pauschale `22/tcp`-Regel, bevor pro CIDR eine `ufw allow
+  from ... to any port 22 proto tcp` ergänzt wird.
+- Reagiert idempotent: bereits vorhandene Rich-Rules/ufw-Regeln werden
+  nicht doppelt angelegt, Reload nur bei tatsächlicher Änderung.
+- **Sicherheitsnetz:** Bereits bestehende SSH-Verbindungen (inklusive der,
+  über die Ansible selbst gerade läuft) werden von einer
+  Firewall-Änderung normalerweise **nicht** gekappt — `ESTABLISHED`-Traffic
+  bleibt erlaubt, unabhängig von neuen Regeln. Das gibt eine gewisse
+  Sicherheit, falls die eigene IP fälschlich fehlt — ersetzt aber keinen
+  sorgfältigen Test in einer zweiten, parallelen Sitzung vor dem
+  produktiven Einsatz.
+
+Mit `ssh_allowlist_manage: false` komplett abschaltbar (dann bleibt die
+default-permissive SSH-Freigabe der VM unangetastet bestehen).
 
 ## Variablen (in `group_vars/all/vars.yml` oder Rollen-`defaults`)
 
@@ -297,17 +385,23 @@ Firewall-Freigabe mit ein). Nur die Firewall-Freigabe separat abschalten:
 |------------------------|----------------------|-------------------------------------------------|
 | `mssql_remote_dir`     | `/opt/mssql-docker`  | Zielverzeichnis auf der VM                      |
 | `mssql_disable_sa`     | `true`                | steuert `DISABLE_SA` in der `.env`              |
-| `mssql_db_port`        | `1433`                | Host-Port für Docker-Portmapping **und** Firewall-Freigabe |
+| `mssql_db_port`        | `1433`                | Port, an `wireguard_server_ip` gebunden (Docker-Portmapping + firewalld-Zone) |
 | `docker_engine_manage` | `true`                | Docker-Installation aktivieren/überspringen     |
 | `docker_ce_repo_url`   | centos-Repo (s. o.)  | nur RedHat-Familie: Quelle für `docker-ce.repo` |
 | `docker_remove_podman_docker` | `true`         | nur RedHat-Familie: `podman-docker`-Shim entfernen |
 | `docker_cleanup_manage`      | `true`          | Image-Cleanup aktivieren/überspringen           |
 | `docker_cleanup_prune_all`   | `true`          | `-a` bei `docker image prune` (alle ungenutzten statt nur dangling) |
 | `docker_cleanup_builder_cache` | `true`        | zusätzlich `docker builder prune -f` ausführen  |
-| `firewall_manage`     | `true`                | Firewall-Freigabe aktivieren/überspringen       |
+| `wireguard_server_manage` | `true`             | WireGuard-Setup aktivieren/überspringen         |
+| `wireguard_server_ip`  | `10.10.0.1`           | Tunnel-IP der VM; DB-Port wird exakt daran gebunden |
+| `wireguard_server_prefix` | `24`               | Präfixlänge des Overlay-Netzes                  |
+| `wireguard_listen_port` | `51820`              | UDP-Port für den WireGuard-Handshake (öffentlich) |
+| `wireguard_peers`      | `[]`                  | Liste von `{name, public_key, allowed_ip[, preshared_key]}` |
 | `sftp_backup_manage`  | `true`                | SFTP-Zugang aktivieren/überspringen             |
-| `sftp_backup_port`    | `22`                   | Port, der für SFTP in der Firewall freigegeben wird |
-| `sftp_backup_firewall_manage` | `true`         | nur die Firewall-Freigabe für SFTP aktivieren/überspringen |
+| `sftp_backup_port`    | `22`                   | informativ, muss zu `ssh_allowlist_port` passen |
+| `ssh_allowlist_manage` | `true`                | SSH/SFTP-Allowlist aktivieren/überspringen      |
+| `ssh_allowlist_port`  | `22`                   | Port, auf den die Allowlist angewendet wird     |
+| `ssh_allowed_cidrs`   | `[]` (**muss befüllt werden**) | erlaubte Quell-IP-Bereiche für SSH/SFTP |
 | `sa_password`          | *(aus Vault)*         | initiales sa-Passwort (Bootstrap, dann gesperrt)|
 | `admin_login`          | *(aus Vault)*         | Name des sysadmin-Ersatz-Logins                 |
 | `admin_password`       | *(aus Vault)*         | Passwort des Ersatz-Logins                      |
@@ -336,11 +430,50 @@ beachten:
 - `docker compose up -d` erkennt die geänderte Portmapping-Zeile in der neu
   gerenderten `docker-compose.yml` und startet den Container neu, damit der
   neue Port tatsächlich gebunden wird.
-- `firewall_db_port` **öffnet nur den neuen Port** — der alte bleibt in der
-  Firewall offen (die Rolle schließt nichts automatisch, um keine anderen,
-  eventuell absichtlich offenen Ports zu gefährden). Bei Bedarf manuell
-  schließen, z. B.: `firewall-cmd --permanent --remove-port=1433/tcp &&
-  firewall-cmd --reload`.
+- `wireguard_server` **öffnet nur den neuen Port** in der `wireguard`-Zone
+  — der alte bleibt dort offen (die Rolle schließt nichts automatisch, um
+  keine anderen, eventuell absichtlich offenen Ports zu gefährden). Bei
+  Bedarf manuell schließen, z. B.: `firewall-cmd --permanent
+  --zone=wireguard --remove-port=1433/tcp && firewall-cmd --reload`. Da
+  der Port ohnehin nur über den WireGuard-Tunnel erreichbar ist, ist das
+  Risiko eines offenen alten Ports deutlich geringer als bei einer
+  öffentlichen Freigabe.
+
+## WireGuard-Peer hinzufügen/entfernen
+
+**Hinzufügen:**
+
+```bash
+# auf dem Client-Gerät
+wg genkey | tee privatekey | wg pubkey > publickey
+```
+
+Den Inhalt von `publickey` (nicht `privatekey`!) in `wireguard_peers` in
+`group_vars/all/vars.yml` eintragen, dann `ansible-playbook site.yml`
+erneut laufen lassen. Der Client braucht zusätzlich eine eigene
+`wg0.conf` mit `Endpoint = <VM-IP>:{{ wireguard_listen_port }}` und dem
+**Server**-Public-Key (wird am Ende des `wireguard_server`-Laufs
+ausgegeben).
+
+**Entfernen:** den entsprechenden Eintrag aus `wireguard_peers` löschen
+und das Playbook erneut ausführen — der Peer verschwindet aus `wg0.conf`,
+der Zugriff ist ab dem nächsten `wg-quick`-Neustart (passiert automatisch
+via Handler) gesperrt.
+
+## SSH/SFTP-Allowlist pflegen
+
+```bash
+ansible-playbook site.yml --ask-vault-pass \
+  -e '{"ssh_allowed_cidrs": ["203.0.113.0/24", "198.51.100.42/32"]}'
+```
+
+Oder dauerhaft in `group_vars/all/vars.yml`. Auch hier gilt: bereits
+erlaubte CIDRs, die aus der Liste entfernt werden, werden **nicht**
+automatisch aus der Firewall gelöscht (nur additiv, aus denselben
+Sicherheitsgründen wie oben) — bei Bedarf manuell entfernen:
+`firewall-cmd --permanent --zone=public --remove-rich-rule='rule
+family="ipv4" source address="..." port protocol="tcp" port="22"
+accept' && firewall-cmd --reload`.
 
 ## Erneutes Ausrollen / Aktualisieren
 

@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  description: Beschränkt SSH/SFTP auf eine feste Liste von Quell-CIDRs, nur ansible.builtin
+  min_ansible_version: "2.14"
+
+dependencies: []

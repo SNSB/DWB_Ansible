@@ -15,7 +15,7 @@ services:
       ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
       DISABLE_SA: "${DISABLE_SA:-true}"
     ports:
-      - "{{ mssql_db_port }}:1433"
+      - "{{ wireguard_server_ip }}:{{ mssql_db_port }}:1433"
     volumes:
       - ./data:/var/opt/mssql/data
       - ./backup:/var/opt/mssql/backup

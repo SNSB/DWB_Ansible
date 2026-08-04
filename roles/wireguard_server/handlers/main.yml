@@ -1,0 +1,5 @@
+---
+- name: wg0 neu starten
+  ansible.builtin.service:
+    name: "wg-quick@{{ wireguard_interface }}"
+    state: restarted
