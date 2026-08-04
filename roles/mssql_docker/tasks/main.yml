@@ -58,6 +58,24 @@
   register: mssql_build
   changed_when: "'CACHED' not in mssql_build.stdout"
 
+- name: Prüfen, dass die WireGuard-Tunnel-IP bereits an einem Interface hängt
+  ansible.builtin.command: ip -4 -o addr show
+  register: mssql_docker_ip_check
+  changed_when: false
+
+- name: Abbrechen mit klarer Meldung, falls die Tunnel-IP fehlt
+  ansible.builtin.fail:
+    msg: >-
+      {{ wireguard_server_ip }} ist auf diesem Host aktuell an keinem
+      Interface gebunden. "docker compose up" würde beim Binden des
+      DB-Ports mit "cannot assign requested address" fehlschlagen, da
+      Docker den Host-Port nur an eine bereits existierende lokale
+      Adresse binden kann. Ursache meist: roles/wireguard_server ist
+      noch nicht (erfolgreich) gelaufen, oder wg0 ist inaktiv - prüfen
+      mit "wg show" bzw. "ip addr show wg0" auf der VM. Die Reihenfolge
+      in site.yml muss wireguard_server VOR mssql_docker ausführen.
+  when: wireguard_server_ip not in mssql_docker_ip_check.stdout
+
 - name: Stack starten (idempotent - docker compose macht bei bestehendem, unverändertem Container nichts)
   ansible.builtin.command:
     cmd: docker compose up -d

@@ -139,6 +139,19 @@ ansible-playbook site.yml --vault-password-file ~/.ansible/vault_pass.txt
 
 ## Was die Rollen tun
 
+**Reihenfolge in `site.yml` ist kein Zufall:**
+`docker_engine → wireguard_server → mssql_docker → docker_cleanup →
+sftp_backup → ssh_allowlist`. Besonders wichtig:
+`wireguard_server` **muss vor** `mssql_docker` laufen — `docker compose`
+bindet den DB-Port an `wireguard_server_ip`, und Docker kann einen
+Host-Port nur an eine Adresse binden, die bereits einem lokalen Interface
+zugeordnet ist (`wg0` muss also schon stehen). Falls diese Reihenfolge
+vertauscht oder `wireguard_server_manage: false` gesetzt wird, ohne die
+Portbindung in `docker-compose.yml.j2` anzupassen, bricht `mssql_docker`
+mit einer expliziten Fehlermeldung ab (Vorab-Prüfung per `ip -4 -o addr
+show`), statt mit Dockers kryptischem `cannot assign requested address`
+zu scheitern.
+
 ### `docker_engine` (optional, aber für Rocky-VMs erforderlich)
 
 Installiert Docker CE + Compose-Plugin **bevor** `mssql_docker` läuft
@@ -199,9 +212,13 @@ der VM bereits vorhanden ist. Am Ende wird zusätzlich mit
 5. Rendert `.env` aus `templates/env.j2` mit den Vault-Secrets, Modus 0600.
    `no_log: true` verhindert, dass Passwörter im Ansible-Output auftauchen.
 6. Baut das Image mit `docker compose build`.
-7. Startet den Stack mit `docker compose up -d`.
+7. Prüft per `ip -4 -o addr show`, ob `wireguard_server_ip` bereits einem
+   lokalen Interface zugeordnet ist, und bricht mit einer klaren
+   Fehlermeldung ab, falls nicht — siehe Hinweis zur Rollen-Reihenfolge
+   oben.
+8. Startet den Stack mit `docker compose up -d`.
 
-Schritte 6+7 sind bewusst **immer** aktiv (nicht nur bei geänderten
+Schritte 6+8 sind bewusst **immer** aktiv (nicht nur bei geänderten
 Dateien) — `docker compose` ist selbst idempotent (Layer-Cache, keine
 Neuerstellung ohne Änderung), sodass wiederholte Playbook-Läufe günstig
 bleiben, auch ohne Ansible-Handler-Logik. Das `changed_when` auf beiden
