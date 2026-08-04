@@ -41,12 +41,12 @@
   failed_when: false
   when:
     - ssh_allowlist_manage | bool
-    - ansible_os_family == "RedHat"
+    - ansible_facts['os_family'] == "RedHat"
 
 - name: firewalld - CIDR-Allowlist einrichten
   when:
     - ssh_allowlist_manage | bool
-    - ansible_os_family == "RedHat"
+    - ansible_facts['os_family'] == "RedHat"
     - ssh_allowlist_fw_services is defined
     - ssh_allowlist_fw_services.rc == 0
   block:
@@ -87,12 +87,12 @@
   failed_when: false
   when:
     - ssh_allowlist_manage | bool
-    - ansible_os_family == "Debian"
+    - ansible_facts['os_family'] == "Debian"
 
 - name: ufw - CIDR-Allowlist einrichten
   when:
     - ssh_allowlist_manage | bool
-    - ansible_os_family == "Debian"
+    - ansible_facts['os_family'] == "Debian"
     - ssh_allowlist_ufw_status is defined
     - ssh_allowlist_ufw_status.rc == 0
     - "'Status: active' in ssh_allowlist_ufw_status.stdout"

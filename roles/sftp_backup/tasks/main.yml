@@ -21,7 +21,7 @@
 
 - name: SSH-Dienstnamen ermitteln (sshd auf RedHat, ssh auf Debian)
   ansible.builtin.set_fact:
-    sftp_backup_ssh_service: "{{ 'sshd' if ansible_os_family == 'RedHat' else 'ssh' }}"
+    sftp_backup_ssh_service: "{{ 'sshd' if ansible_facts['os_family'] == 'RedHat' else 'ssh' }}"
   when: sftp_backup_manage | bool
 
 - name: SSH-Dienst aktivieren und starten
@@ -33,7 +33,7 @@
 
 - name: Login-Shell für den SFTP-Nutzer ermitteln
   ansible.builtin.set_fact:
-    sftp_backup_shell: "{{ sftp_backup_shell_redhat if ansible_os_family == 'RedHat' else sftp_backup_shell_debian }}"
+    sftp_backup_shell: "{{ sftp_backup_shell_redhat if ansible_facts['os_family'] == 'RedHat' else sftp_backup_shell_debian }}"
   when: sftp_backup_manage | bool
 
 - name: SFTP-Nutzer anlegen (nologin-Shell, kein eigenes Home wird erstellt)
@@ -113,12 +113,12 @@
   failed_when: false
   when:
     - sftp_backup_manage | bool
-    - ansible_os_family == "RedHat"
+    - ansible_facts['os_family'] == "RedHat"
 
 - name: SELinux-Kontext für den Chroot setzen
   when:
     - sftp_backup_manage | bool
-    - ansible_os_family == "RedHat"
+    - ansible_facts['os_family'] == "RedHat"
     - sftp_backup_selinux_status is defined
     - sftp_backup_selinux_status.stdout | default('') == "Enforcing"
   block:

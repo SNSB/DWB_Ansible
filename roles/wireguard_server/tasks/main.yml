@@ -29,7 +29,7 @@
     state: present
   when:
     - wireguard_server_manage | bool
-    - ansible_os_family == "RedHat"
+    - ansible_facts['os_family'] == "RedHat"
 
 - name: wireguard-tools installieren
   ansible.builtin.package:
@@ -142,12 +142,12 @@
   failed_when: false
   when:
     - wireguard_server_manage | bool
-    - ansible_os_family == "RedHat"
+    - ansible_facts['os_family'] == "RedHat"
 
 - name: firewalld - WireGuard-Zone anlegen und konfigurieren
   when:
     - wireguard_server_manage | bool
-    - ansible_os_family == "RedHat"
+    - ansible_facts['os_family'] == "RedHat"
     - wireguard_fw_zones is defined
     - wireguard_fw_zones.rc == 0
   block:
@@ -227,13 +227,13 @@
   failed_when: false
   when:
     - wireguard_server_manage | bool
-    - ansible_os_family == "Debian"
+    - ansible_facts['os_family'] == "Debian"
 
 - name: "ufw - WireGuard-Handshake-Port {{ wireguard_listen_port }}/udp freigeben"
   ansible.builtin.command: "ufw allow {{ wireguard_listen_port }}/udp"
   when:
     - wireguard_server_manage | bool
-    - ansible_os_family == "Debian"
+    - ansible_facts['os_family'] == "Debian"
     - wireguard_ufw_status is defined
     - wireguard_ufw_status.rc == 0
     - "'Status: active' in wireguard_ufw_status.stdout"

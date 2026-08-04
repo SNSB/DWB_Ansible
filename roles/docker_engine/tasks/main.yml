@@ -12,11 +12,11 @@
 - name: Unbekannte OS-Familie melden
   ansible.builtin.debug:
     msg: >-
-      ansible_os_family={{ ansible_os_family }} wird von dieser Rolle nicht
+      OS-Familie {{ ansible_facts['os_family'] }} wird von dieser Rolle nicht
       unterstützt (nur Debian und RedHat). Docker muss manuell vorhanden sein.
   when:
     - docker_engine_manage | bool
-    - ansible_os_family not in ["Debian", "RedHat"]
+    - ansible_facts['os_family'] not in ["Debian", "RedHat"]
 
 # ---------------------------------------------------------------------------
 # Debian / Ubuntu
@@ -24,7 +24,7 @@
 - name: Debian/Ubuntu - Docker installieren
   when:
     - docker_engine_manage | bool
-    - ansible_os_family == "Debian"
+    - ansible_facts['os_family'] == "Debian"
   block:
     - name: Benötigte Pakete installieren
       ansible.builtin.apt:
@@ -52,9 +52,9 @@
         name: docker
         types: [deb]
         uris: "https://download.docker.com/linux/ubuntu"
-        suites: "{{ ansible_distribution_release }}"
+        suites: "{{ ansible_facts['distribution_release'] }}"
         components: [stable]
-        architectures: "{{ 'amd64' if ansible_architecture == 'x86_64' else ansible_architecture }}"
+        architectures: "{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else ansible_facts['architecture'] }}"
         signed_by: /etc/apt/keyrings/docker.asc
         state: present
 
@@ -90,7 +90,7 @@
 - name: RHEL/Rocky/AlmaLinux - Docker installieren
   when:
     - docker_engine_manage | bool
-    - ansible_os_family == "RedHat"
+    - ansible_facts['os_family'] == "RedHat"
   block:
     - name: Alte/inkompatible Docker-Pakete entfernen (No-Op, falls nicht vorhanden)
       ansible.builtin.dnf:
