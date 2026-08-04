@@ -61,11 +61,15 @@
       changed_when: false
 
     - name: "Rich-Rule je erlaubtem CIDR hinzufügen (nur falls noch nicht vorhanden)"
-      ansible.builtin.command: >-
-        firewall-cmd --permanent --zone=public --add-rich-rule=
-        'rule family="{{ 'ipv6' if ':' in item else 'ipv4' }}"
-        source address="{{ item }}"
-        port protocol="tcp" port="{{ ssh_allowlist_port }}" accept'
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - --permanent
+          - --zone=public
+          - >-
+            --add-rich-rule=rule family="{{ 'ipv6' if ':' in item else 'ipv4' }}"
+            source address="{{ item }}"
+            port protocol="tcp" port="{{ ssh_allowlist_port }}" accept
       loop: "{{ ssh_allowed_cidrs }}"
       when: >-
         ('source address="' ~ item ~ '"') not in ssh_allowlist_fw_rich_rules.stdout
