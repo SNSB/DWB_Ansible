@@ -3,10 +3,12 @@
 # Images, um Speicherplatz freizugeben. Nur ansible.builtin.command gegen
 # die docker-CLI - keine community.docker Collection.
 #
-# WICHTIG: Es wird bewusst NIE "docker volume prune" o. Ä. ausgeführt -
-# das würde die benannten Volumes mssql-log/mssql-secrets gefährden
-# (Verschlüsselungs-/Zertifikatsmaterial von SQL Server liegt dort). Diese
-# Rolle fasst ausschließlich Images (und optional den Build-Cache) an.
+# WICHTIG: Es wird bewusst NIE "docker volume prune" o. Ä. ausgeführt.
+# data/backup/log/secrets sind Bind-Mounts (keine benannten Docker-Volumes
+# mehr), daher unkritisch für Image-/Volume-Cleanup - trotzdem bleibt diese
+# Rolle strikt auf Images (und optional den Build-Cache) beschränkt, um
+# jedes Risiko für den SQL-Server-Zustand (Machine-Key in secrets/) zu
+# vermeiden.
 
 - name: Aufräumen überspringen (docker_cleanup_manage=false)
   ansible.builtin.debug:

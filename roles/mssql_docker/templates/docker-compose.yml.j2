@@ -19,8 +19,8 @@ services:
     volumes:
       - ./data:/var/opt/mssql/data
       - ./backup:/var/opt/mssql/backup
-      - mssql-log:/var/opt/mssql/log
-      - mssql-secrets:/var/opt/mssql/secrets
+      - ./log:/var/opt/mssql/log
+      - ./secrets:/var/opt/mssql/secrets
     restart: unless-stopped
     healthcheck:
       # Uses the management login, since sa is disabled after first boot.
@@ -29,7 +29,3 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-
-volumes:
-  mssql-log:
-  mssql-secrets:

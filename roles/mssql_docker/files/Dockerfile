@@ -9,7 +9,7 @@ ENV ACCEPT_EULA=Y \
     MSSQL_BACKUP_DIR=/var/opt/mssql/backup
 
 # Create the mount points up front (compose will bind-mount over these)
-RUN mkdir -p /var/opt/mssql/data /var/opt/mssql/backup && \
+RUN mkdir -p /var/opt/mssql/data /var/opt/mssql/backup /var/opt/mssql/log /var/opt/mssql/secrets && \
     chown -R mssql:mssql /var/opt/mssql
 
 # App files: entrypoint wrapper, T-SQL setup scripts, and the sa toggle helper

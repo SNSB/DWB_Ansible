@@ -7,7 +7,7 @@ set -e
 
 # Bind-mounted host folders come in owned by the host UID, not "mssql" (uid 10001).
 # Fix that every start, since it's cheap and avoids permission errors.
-chown -R mssql:mssql /var/opt/mssql/data /var/opt/mssql/backup || true
+chown -R mssql:mssql /var/opt/mssql/data /var/opt/mssql/backup /var/opt/mssql/log /var/opt/mssql/secrets || true
 
 # Start SQL Server itself as the unprivileged "mssql" user, in the background.
 su mssql -c "/opt/mssql/bin/sqlservr" &

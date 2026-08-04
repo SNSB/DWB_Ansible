@@ -201,7 +201,15 @@ der VM bereits vorhanden ist. Am Ende wird zusätzlich mit
 ### `mssql_docker`
 
 1. Legt `{{ mssql_remote_dir }}` (Standard: `/opt/mssql-docker`) sowie die
-   Unterordner `data/` und `backup/` auf der VM an.
+   Unterordner `data/`, `backup/`, `log/` (Modus `0750`) und `secrets/`
+   (Modus `0700`, enthält den SQL-Server-Machine-Key) auf der VM an. Alle
+   vier sind Bind-Mounts auf reguläre Host-Ordner — bewusst **keine**
+   benannten Docker-Volumes mehr, da benannte Volumes bei einem früheren
+   fehlgeschlagenen Lauf mit falschem Owner "hängen bleiben" konnten und
+   auch nach einem Image-Fix nicht automatisch neu initialisiert wurden
+   (führte zu `Could not open error log file ... Access is denied`).
+   Bind-Mounts werden dagegen bei jedem Container-Start explizit über
+   `entrypoint.sh` auf `mssql:mssql` gechownt, sind also selbstheilend.
 2. Kopiert `Dockerfile` und die SQL-Skripte unverändert aus `files/`.
 3. Rendert `docker-compose.yml` aus `templates/docker-compose.yml.j2` — der
    Container-Port wird an `wireguard_server_ip:{{ mssql_db_port }}` gebunden
@@ -239,11 +247,11 @@ entstandenen Layer-Müll wieder freizugeben:
   dangling Images) umstellbar.
 - `docker builder prune -f` — räumt zusätzlich den Build-Cache auf.
   Mit `docker_cleanup_builder_cache: false` abschaltbar.
-- **Fasst nie Volumes an** — `mssql-log` und `mssql-secrets` (benannte
-  Volumes mit Zertifikats-/Verschlüsselungsmaterial von SQL Server) sowie
-  die bind-gemounteten `data/`/`backup/`-Ordner bleiben unangetastet. Es
-  gibt bewusst kein `docker volume prune` oder `docker system prune`
-  in dieser Rolle.
+- **Fasst nie `docker volume`/`system prune` an** — `data/`, `backup/`,
+  `log/` und `secrets/` (u. a. Zertifikats-/Verschlüsselungsmaterial von
+  SQL Server) sind alles Bind-Mounts auf reguläre Host-Ordner, kein
+  Docker-Volume-Cleanup betrifft sie. Diese Rolle bleibt trotzdem strikt
+  auf Images/Build-Cache beschränkt, um jedes Risiko auszuschließen.
 - Gibt am Ende in `Freigegebenen Speicherplatz melden` aus, wie viel
   Speicherplatz jeweils zurückgewonnen wurde.
 
