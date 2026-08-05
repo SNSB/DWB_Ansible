@@ -91,5 +91,26 @@ $SQLCMD -S localhost -U "$RUN_USER" -P "$RUN_PASS" \
     -v AdminLogin="$ADMIN_LOGIN" \
     -i /usr/src/app/setup-backup-job.sql
 
+# --- Verify the server/db collation actually matches MSSQL_COLLATION ---
+# Known upstream caveat (microsoft/mssql-docker#629): combining
+# MSSQL_COLLATION with MSSQL_AGENT_ENABLED=True can leave msdb on the
+# default collation while master/model/tempdb get set correctly. This is
+# a warning, not a hard failure - the instance still starts either way.
+if [ -n "$MSSQL_COLLATION" ]; then
+    echo "Verifying collation (expected: $MSSQL_COLLATION)..."
+    $SQLCMD -S localhost -U "$RUN_USER" -P "$RUN_PASS" -h -1 -W \
+        -Q "SET NOCOUNT ON;
+            SELECT name + ': ' + CONVERT(NVARCHAR(128), collation_name)
+            FROM sys.databases
+            WHERE name IN ('master','model','msdb','tempdb');" \
+        | while read -r line; do
+            [ -n "$line" ] && echo "  $line"
+            case "$line" in
+                *"$MSSQL_COLLATION") ;;
+                *) echo "  WARNING: above database is not on $MSSQL_COLLATION - see microsoft/mssql-docker#629 (MSSQL_COLLATION + MSSQL_AGENT_ENABLED)." >&2 ;;
+            esac
+        done
+fi
+
 echo "Setup complete. Handing off to SQL Server process."
 wait "$SQLSERVR_PID"

@@ -234,6 +234,37 @@ Tasks ist eine Heuristik auf Basis der `docker compose`-Ausgabe (prüft auf
 `Started`/`Created` bzw. `CACHED`) — für exakte Änderungserkennung reicht
 das in der Praxis, ist aber kein Garant in jeder Compose-Version.
 
+#### Collation
+
+Server-Collation wird über `mssql_collation` gesteuert (Standard:
+`Latin1_General_CI_AS`) und als `MSSQL_COLLATION` an den Container
+durchgereicht — die offizielle Env-Variable des `mssql-server`-Linux-
+Images.
+
+**Wichtig:** Das wirkt nur bei der **allerersten** Initialisierung, wenn
+`data/` leer ist — Collation wird fest in `master`/`model`/`msdb`/`tempdb`
+einkompiliert und lässt sich danach nicht mehr per Env-Variable ändern.
+Bei einer bereits laufenden Instanz mit falscher Collation:
+
+```bash
+cd /opt/mssql-docker
+docker compose down
+sudo rm -rf ./data/* ./log/* ./secrets/*   # ./backup bleibt unangetastet
+ansible-playbook site.yml --ask-vault-pass  # initialisiert mit neuer Collation neu
+```
+
+`entrypoint.sh` prüft nach jedem Setup automatisch die tatsächliche
+Collation von `master`/`model`/`msdb`/`tempdb` gegen `MSSQL_COLLATION` und
+warnt (in `docker logs mssql-server`) bei Abweichungen. Hintergrund: ein
+bekanntes Zusammenspiel-Problem zwischen `MSSQL_COLLATION` und
+`MSSQL_AGENT_ENABLED=True` (das wir ja nutzen) kann dazu führen, dass
+`msdb` auf der Standard-Collation hängen bleibt, während die anderen drei
+Datenbanken korrekt gesetzt werden
+([microsoft/mssql-docker#629](https://github.com/microsoft/mssql-docker/issues/629)).
+Betrifft praktisch nur Agent-interne Objekte (Job-Namen o. Ä.), nicht
+eure eigenen Datenbanken — trotzdem gut, es zu wissen und im Log zu sehen,
+statt es erst bei einem Sortierungs-Bug in der Praxis zu bemerken.
+
 ### `docker_cleanup`
 
 Läuft direkt nach `mssql_docker`, um den durch `docker compose build`
@@ -411,6 +442,7 @@ default-permissive SSH-Freigabe der VM unangetastet bestehen).
 | `mssql_remote_dir`     | `/opt/mssql-docker`  | Zielverzeichnis auf der VM                      |
 | `mssql_disable_sa`     | `true`                | steuert `DISABLE_SA` in der `.env`              |
 | `mssql_db_port`        | `1433`                | Port, an `wireguard_server_ip` gebunden (Docker-Portmapping + firewalld-Zone) |
+| `mssql_collation`      | `Latin1_General_CI_AS` | Server-Collation, nur bei allererster Initialisierung wirksam |
 | `docker_engine_manage` | `true`                | Docker-Installation aktivieren/überspringen     |
 | `docker_ce_repo_url`   | centos-Repo (s. o.)  | nur RedHat-Familie: Quelle für `docker-ce.repo` |
 | `docker_remove_podman_docker` | `true`         | nur RedHat-Familie: `podman-docker`-Shim entfernen |

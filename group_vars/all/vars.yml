@@ -7,6 +7,14 @@
 mssql_remote_dir: /opt/mssql-docker
 mssql_disable_sa: true
 
+# Server-Collation. Wird NUR bei der allerersten Initialisierung wirksam
+# (leeres data/-Verzeichnis) - fest in master/model/msdb einkompiliert.
+# Bei einer bereits laufenden Instanz muss data/ geleert und neu
+# initialisiert werden (siehe README, Abschnitt "Collation ändern"),
+# oder mssql-conf set-collation auf der laufenden Instanz verwendet
+# werden (komplexer, siehe README).
+mssql_collation: Latin1_General_CI_AS
+
 # Host-Port, unter dem der SQL Server erreichbar ist - jetzt NUR NOCH über
 # die WireGuard-Tunnel-IP gebunden (siehe wireguard_server_ip), nicht mehr
 # öffentlich. roles/firewall_db_port ist dadurch obsolet und wird in
